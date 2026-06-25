@@ -24,8 +24,18 @@ export function RunningPanel({
   isCancelling = false,
   onCancel,
 }: RunningPanelProps) {
+  // Switch to indeterminate animation when:
+  //   - Running genProject / forceSync (no file progress for these steps)
+  //   - p4Sync has consumed all files the dry-run estimated but is still going
+  //     (dry-run can undercount when new CLs land between preview and actual sync)
+  const p4SyncOverrun =
+    currentStep === "p4Sync" &&
+    progress.total > 0 &&
+    progress.current >= progress.total;
   const isIndeterminate =
-    currentStep === "genProject" || (currentStep as string) === "forceSync";
+    currentStep === "genProject" ||
+    (currentStep as string) === "forceSync" ||
+    p4SyncOverrun;
   return (
     <div className="flex h-full flex-col">
       <StepIndicator

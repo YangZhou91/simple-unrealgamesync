@@ -740,12 +740,17 @@ impl SyncOrchestrator {
             )
             .await;
 
-        // Forward final total to frontend for completion state
+        // Forward final total to frontend for completion state.
+        // Clamp: use max(dry_run_total, actual_synced) so the final progress
+        // event never shows current > total when the real sync outruns the
+        // dry-run estimate (e.g. new CLs landed between preview and actual sync).
         let dry_run_total = total.load(Ordering::Relaxed);
-        if dry_run_total > 0 {
+        let actual_count = files_synced.as_ref().copied().unwrap_or(0);
+        let clamped_total = dry_run_total.max(actual_count);
+        if clamped_total > 0 {
             let _ = channel.send(SyncEvent::Progress {
-                current: files_synced.as_ref().copied().unwrap_or(0),
-                total: dry_run_total,
+                current: actual_count,
+                total: clamped_total,
                 current_file: String::new(),
             });
         }

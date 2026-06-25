@@ -13,8 +13,14 @@ export function ProgressSection({
   currentFile,
   indeterminate = false,
 }: ProgressSectionProps) {
-  const fileText =
-    total > 0 ? `${current}/${total} files` : `${current} files...`;
+  // When current exceeds the dry-run estimate (new CLs arrived mid-sync),
+  // show "N+ files…" instead of "N/N files" so the user knows it's still running.
+  const overrun = total > 0 && current >= total;
+  const fileText = total > 0
+    ? overrun
+      ? `${total}+ files…`
+      : `${current}/${total} files`
+    : `${current} files...`;
   const pct = total > 0 ? (current / total) * 100 : 0;
 
   return (
