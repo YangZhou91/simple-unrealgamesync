@@ -41,7 +41,7 @@
   },
   "plugins": {
     "updater": {
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDREODlDODIyMjY3RjU0M0UKUldRK1ZIOG1Jc2lKVGMyL1o0VUpEK2tKU3JwdDFEakh4YnRxaWpjNG1MRnNNMXFZRnBtVzExTkYK",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDhFRTk3NzYxNUJENDIxNTY0NzgyRjMKUldUektkUmJZWGZwamtyaVlIdVQwa3JqU2ZhSWE3SFphYnFxYXYxY3M1dGhYblBlcU1Ea0I3dnlobFBFTQ==",
       "endpoints": [
         "https://github.com/YangZhou91/simple-unrealgamesync/releases/latest/download/latest.json"
       ]
