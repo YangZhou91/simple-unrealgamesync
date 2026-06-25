@@ -55,7 +55,6 @@ pub async fn check_sync_behind(
         target_cl: None,
         parallel_threads: ws.parallel_threads,
         exclusions: ws.exclusions.clone(),
-        pin_cl: None,
     };
 
     let (request_id, token) = state.begin_behind_check().await;
