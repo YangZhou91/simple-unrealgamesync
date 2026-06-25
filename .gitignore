@@ -37,3 +37,7 @@ yarn-error.log*
 .DS_Store
 Thumbs.db
 *.local
+
+# Tauri updater signing keys (NEVER commit)
+*.key
+*.key.pub
