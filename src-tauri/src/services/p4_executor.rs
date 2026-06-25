@@ -91,6 +91,11 @@ pub struct SyncOptions {
     pub target_cl: Option<String>,
     pub parallel_threads: u32,
     pub exclusions: Vec<String>,
+    /// Internal CL snapshot captured from `p4 changes -m1` at dry-run time.
+    /// Used to pin the sync (`@CL` suffix) for normal updates (target_cl=None)
+    /// WITHOUT enabling full-sync scope (workspace_root_scope / forceSync stay off).
+    /// Explicit CL / rollback (target_cl=Some) ignores this. None on capture failure.
+    pub pin_cl: Option<String>,
 }
 
 impl Default for SyncOptions {
@@ -99,6 +104,7 @@ impl Default for SyncOptions {
             target_cl: None,
             parallel_threads: 4,
             exclusions: Vec::new(),
+            pin_cl: None,
         }
     }
 }
@@ -280,6 +286,7 @@ pub fn build_p4_sync_args(
     root_path: &str,
     project_dir: &str,
     target_cl: &Option<String>,
+    pin_cl: &Option<String>,
 ) -> Vec<String> {
     let mut args = vec!["sync".to_string()];
 
@@ -287,10 +294,17 @@ pub fn build_p4_sync_args(
         args.push(format!("--parallel=threads={}", options.parallel_threads));
     }
 
+    // Scope is gated by the EXPLICIT target_cl only. pin_cl must NOT flip
+    // workspace_root_scope — otherwise a lightweight project-only update would
+    // silently become a full Engine sync and trigger forceSync. Decoupled by design.
     let workspace_root_scope = target_cl.is_some();
     let paths =
         resolve_non_excluded_paths(root_path, project_dir, &options.exclusions, workspace_root_scope);
-    let cl_suffix = match target_cl {
+    // Effective CL: explicit target_cl wins; otherwise fall back to pin_cl (the
+    // dry-run snapshot) so the actual sync is bounded to the same CL the dry-run
+    // previewed — keeping dry-run and real-sync file sets identical (no overrun).
+    let effective_cl = target_cl.as_ref().or(pin_cl.as_ref());
+    let cl_suffix = match effective_cl {
         Some(cl) => format!("@{}", cl),
         None => String::new(),
     };
@@ -441,6 +455,46 @@ impl P4Executor {
         }
     }
 
+    /// Latest submitted changelist touching the same paths a sync would touch
+    /// (same scope/exclusions as `build_p4_sync_args`). Snapshots HEAD at dry-run
+    /// time so the actual sync can be pinned to it via `pin_cl`, keeping the
+    /// dry-run preview and the real sync file sets identical (no progress overrun).
+    ///
+    /// Returns `None` on any error or empty result — callers fall back to HEAD.
+    pub async fn get_latest_changelist(
+        &self,
+        workspace: &WorkspaceConfig,
+        options: &SyncOptions,
+    ) -> Option<String> {
+        let scope = options.target_cl.is_some();
+        let paths = resolve_non_excluded_paths(
+            &workspace.root_path,
+            &workspace.project_dir,
+            &options.exclusions,
+            scope,
+        );
+        if paths.is_empty() {
+            return None;
+        }
+
+        let mut args: Vec<String> = vec!["changes".to_string(), "-m1".to_string()];
+        args.extend(paths);
+        let args_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+
+        let mut cmd = self.build_p4_command(workspace, &args_refs);
+        let output = match output_with_retry(&mut cmd).await {
+            Ok(o) => o,
+            Err(_) => return None,
+        };
+
+        if !output.status.success() {
+            return None;
+        }
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        parse_head_changelist(&stdout)
+    }
+
     pub async fn sync(
         &self,
         workspace: &WorkspaceConfig,
@@ -460,6 +514,7 @@ impl P4Executor {
             &workspace.root_path,
             &workspace.project_dir,
             &options.target_cl,
+            &options.pin_cl,
         );
         let args_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
 
@@ -738,6 +793,7 @@ impl P4Executor {
             &workspace.root_path,
             &workspace.project_dir,
             &options.target_cl,
+            &options.pin_cl,
         );
         let mut full_args = args.clone();
         full_args.insert(1, "-n".to_string()); // Insert after "sync" subcommand
@@ -838,6 +894,18 @@ impl P4Executor {
 
         let stdout = String::from_utf8_lossy(&output.stdout);
         Ok(parse_changelists(&stdout))
+    }
+}
+
+/// Parse the first `Change NNNNN on ...` line from `p4 changes` output.
+/// Used by `get_latest_changelist` to snapshot HEAD at dry-run time.
+fn parse_head_changelist(stdout: &str) -> Option<String> {
+    let line = stdout.lines().next()?;
+    let parts: Vec<&str> = line.split_whitespace().collect();
+    if parts.len() >= 2 && parts[0] == "Change" {
+        Some(parts[1].to_string())
+    } else {
+        None
     }
 }
 
@@ -995,7 +1063,7 @@ mod tests {
     #[test]
     fn test_build_p4_sync_args_no_options() {
         let options = SyncOptions::default();
-        let args = build_p4_sync_args(&options, "E:\\test", "MyGame", &None);
+        let args = build_p4_sync_args(&options, "E:\\test", "MyGame", &None, &None);
         // Default SyncOptions has parallel_threads=4, so --parallel is included
         assert_eq!(args[0], "sync");
         assert!(args.contains(&"--parallel=threads=4".to_string()));
@@ -1009,8 +1077,9 @@ mod tests {
             target_cl: None,
             parallel_threads: 1,
             exclusions: vec![],
+            pin_cl: None,
         };
-        let args = build_p4_sync_args(&options, "E:\\test", "MyGame", &None);
+        let args = build_p4_sync_args(&options, "E:\\test", "MyGame", &None, &None);
         assert_eq!(args, vec!["sync", "//..."]);
     }
 
@@ -1018,7 +1087,7 @@ mod tests {
     fn test_build_p4_sync_args_with_cl() {
         let options = SyncOptions::default();
         let target_cl = Some("12345".to_string());
-        let args = build_p4_sync_args(&options, "E:\\test", "MyGame", &target_cl);
+        let args = build_p4_sync_args(&options, "E:\\test", "MyGame", &target_cl, &None);
         assert!(args.contains(&"//...@12345".to_string()));
         assert_eq!(args[0], "sync");
     }
@@ -1029,7 +1098,7 @@ mod tests {
             parallel_threads: 4,
             ..Default::default()
         };
-        let args = build_p4_sync_args(&options, "E:\\test", "MyGame", &None);
+        let args = build_p4_sync_args(&options, "E:\\test", "MyGame", &None, &None);
         assert!(args.contains(&"--parallel=threads=4".to_string()));
     }
 
@@ -1039,7 +1108,7 @@ mod tests {
             parallel_threads: 1,
             ..Default::default()
         };
-        let args = build_p4_sync_args(&options, "E:\\test", "MyGame", &None);
+        let args = build_p4_sync_args(&options, "E:\\test", "MyGame", &None, &None);
         assert!(!args.iter().any(|a| a.contains("--parallel")));
     }
 
@@ -1162,8 +1231,9 @@ mod tests {
             target_cl: Some("99999".to_string()),
             parallel_threads: 4,
             exclusions: vec!["Binaries".to_string()],
+            pin_cl: None,
         };
-        let args = build_p4_sync_args(&options, tmp_dir.to_str().unwrap(), "MyGame", &options.target_cl);
+        let args = build_p4_sync_args(&options, tmp_dir.to_str().unwrap(), "MyGame", &options.target_cl, &None);
 
         assert!(args.contains(&"--parallel=threads=4".to_string()));
         // Should have Content path with @CL suffix
@@ -1180,6 +1250,65 @@ mod tests {
         assert!(!args.iter().any(|a| a.contains("Engine/Binaries")));
 
         let _ = fs::remove_dir_all(&tmp_dir);
+    }
+
+    #[test]
+    fn test_build_p4_sync_args_pin_cl_without_full_scope() {
+        // pin_cl must append @CL but NOT enable workspace_root_scope. Contrast
+        // test_build_p4_sync_args_with_exclusions_and_cl (target_cl=Some -> scope
+        // true -> UnrealEngine included): here target_cl=None + pin_cl keeps scope
+        // off, so the sync stays project-only despite the @CL suffix.
+        let tmp_dir = std::env::temp_dir().join("p4_test_args_pin");
+        let game_dir = tmp_dir.join("MyGame");
+        let ue_dir = tmp_dir.join("UnrealEngine");
+        let _ = fs::remove_dir_all(&tmp_dir);
+        fs::create_dir_all(game_dir.join("Content")).unwrap();
+        fs::create_dir_all(game_dir.join("Binaries")).unwrap();
+        fs::create_dir_all(ue_dir.join("Engine/Config")).unwrap();
+
+        let options = SyncOptions {
+            target_cl: None,
+            parallel_threads: 1,
+            exclusions: vec!["Binaries".to_string()],
+            pin_cl: Some("77777".to_string()),
+        };
+        let args = build_p4_sync_args(
+            &options,
+            tmp_dir.to_str().unwrap(),
+            "MyGame",
+            &None,
+            &options.pin_cl,
+        );
+
+        // Project Content path carries the pinned @CL suffix
+        assert!(args
+            .iter()
+            .any(|a| a.contains("Content") && a.contains("@77777")));
+        // Excluded Binaries is not present
+        assert!(!args.iter().any(|a| a.contains("Binaries")));
+        // Crucially: UnrealEngine is NOT included — scope stays project-only
+        // even though a pin CL is present (decoupled from the @CL suffix).
+        assert!(!args.iter().any(|a| a.contains("UnrealEngine")));
+
+        let _ = fs::remove_dir_all(&tmp_dir);
+    }
+
+    #[test]
+    fn test_parse_head_changelist() {
+        assert_eq!(
+            parse_head_changelist("Change 12345 on 2024/01/01 by user@client"),
+            Some("12345".to_string())
+        );
+        // Only the first line matters
+        assert_eq!(
+            parse_head_changelist(
+                "Change 999 on 2024/01/01 by u@c\nChange 998 on 2024/01/01 by u@c"
+            ),
+            Some("999".to_string())
+        );
+        // Empty / malformed -> None (graceful fallback)
+        assert_eq!(parse_head_changelist(""), None);
+        assert_eq!(parse_head_changelist("no changes"), None);
     }
 
     // --- Tests for parse_changelists ---

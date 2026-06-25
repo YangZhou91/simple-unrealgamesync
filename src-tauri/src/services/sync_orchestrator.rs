@@ -107,6 +107,7 @@ impl SyncOrchestrator {
             target_cl: target_cl.clone(),
             parallel_threads: workspace.parallel_threads,
             exclusions: workspace.exclusions.clone(),
+            pin_cl: None,
         };
 
         // Step 1: Close UE Editor
@@ -193,7 +194,7 @@ impl SyncOrchestrator {
             );
             return Err(e);
         }
-        let files_synced = files_result.unwrap();
+        let (files_synced, captured_cl) = files_result.unwrap();
         info!("[sync] step=p4Sync done, files_synced={files_synced}");
 
         // Step 3b: Force sync Engine files (non-fatal, per D-03)
@@ -234,9 +235,13 @@ impl SyncOrchestrator {
         info!("[sync] step=genProject done");
 
         // Use target_cl directly when specified — get_have_changelist would return
-        // the wrong CL because excluded paths (Binaries, etc.) remain at higher CLs
+        // the wrong CL because excluded paths (Binaries, etc.) remain at higher CLs.
+        // For normal updates, prefer the CL we pinned the sync to (captured at
+        // dry-run time); fall back to get_have_changelist only if capture failed.
         let cl = if target_cl.is_some() {
             target_cl.clone()
+        } else if captured_cl.is_some() {
+            captured_cl.clone()
         } else {
             self.p4.get_have_changelist(&workspace).await.ok().flatten()
         };
@@ -370,6 +375,7 @@ impl SyncOrchestrator {
             target_cl: Some(target_cl.clone()),
             parallel_threads: workspace.parallel_threads,
             exclusions: workspace.exclusions.clone(),
+            pin_cl: None,
         };
 
         let files_result = self
@@ -404,7 +410,7 @@ impl SyncOrchestrator {
             );
             return Err(e);
         }
-        let files_synced = files_result.unwrap();
+        let (files_synced, _) = files_result.unwrap();
 
         // Step 2b: Force sync Engine files (non-fatal, per D-04)
         info!("[sync-rollback] step=forceSync starting");
@@ -516,6 +522,7 @@ impl SyncOrchestrator {
                     target_cl: target_cl.clone(),
                     parallel_threads: workspace.parallel_threads,
                     exclusions: workspace.exclusions.clone(),
+                    pin_cl: None,
                 };
                 let cancel_token = CancellationToken::new();
                 self.process_manager
@@ -671,7 +678,7 @@ impl SyncOrchestrator {
         channel: &Channel<SyncEvent>,
         cancel: CancellationToken,
         options: &SyncOptions,
-    ) -> Result<u64, AppError> {
+    ) -> Result<(u64, Option<String>), AppError> {
         let description = match &options.target_cl {
             Some(cl) => format!("Syncing to CL #{}...", cl),
             None => "Syncing from Perforce...".to_string(),
@@ -681,14 +688,46 @@ impl SyncOrchestrator {
             description,
         });
 
+        // For normal updates (no explicit CL), snapshot the current HEAD
+        // changelist and pin both dry-run and real sync to it. This makes the
+        // dry-run preview and the real sync operate on the exact same file set,
+        // so the real sync can never outrun the estimate (no progress overrun).
+        let captured_cl = if options.target_cl.is_none() {
+            match self.p4.get_latest_changelist(workspace, options).await {
+                Some(cl) => {
+                    info!("[sync] captured HEAD CL for pinning: {cl}");
+                    Some(cl)
+                }
+                None => {
+                    warn!(
+                        "[sync] could not capture HEAD CL; falling back to HEAD sync (overrun possible)"
+                    );
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
+        // Options carrying pin_cl; shared by dry-run and real sync so both use
+        // the same @CL suffix. Scope (workspace_root_scope) is still driven by
+        // target_cl.is_some() — unchanged — so normal updates stay project-only.
+        let pinned_options = SyncOptions {
+            target_cl: options.target_cl.clone(),
+            parallel_threads: options.parallel_threads,
+            exclusions: options.exclusions.clone(),
+            pin_cl: captured_cl.clone(),
+        };
+
         let total = Arc::new(AtomicU64::new(0));
 
         let ws = workspace.clone();
         let total_clone = total.clone();
         let options_clone = SyncOptions {
-            target_cl: options.target_cl.clone(),
-            parallel_threads: options.parallel_threads,
-            exclusions: options.exclusions.clone(),
+            target_cl: pinned_options.target_cl.clone(),
+            parallel_threads: pinned_options.parallel_threads,
+            exclusions: pinned_options.exclusions.clone(),
+            pin_cl: pinned_options.pin_cl.clone(),
         };
         let cancel_clone = cancel.clone();
 
@@ -734,7 +773,7 @@ impl SyncOrchestrator {
                 workspace,
                 channel,
                 cancel,
-                options,
+                &pinned_options,
                 total.clone(),
                 Some(self.process_manager.clone()),
             )
@@ -760,7 +799,7 @@ impl SyncOrchestrator {
             success: files_synced.is_ok(),
         });
 
-        files_synced
+        files_synced.map(|f| (f, captured_cl))
     }
 
     /// Non-fatal force sync step for Engine subtree.
