@@ -9,10 +9,11 @@ import {
 } from "@/components/ui/dialog";
 import { WorkspaceList } from "@/components/workspace/WorkspaceList";
 import { WorkspaceForm } from "@/components/workspace/WorkspaceForm";
-import { Plus, Settings } from "lucide-react";
+import { Plus, Settings, RefreshCw } from "lucide-react";
 import { useState, useEffect } from "react";
 import { getVersion } from "@tauri-apps/api/app";
 import { changelog } from "virtual:changelog";
+import type { UpdaterInfo } from "@/hooks/useUpdater";
 
 /** Parse conventional commit subject into type, scope, description */
 function parseSubject(subject: string) {
@@ -63,6 +64,8 @@ interface SidebarProps {
   ) => Promise<void>;
   onOpenSettings: () => void;
   isSettingsDisabled: boolean;
+  updaterInfo: UpdaterInfo;
+  onCheckUpdate: () => void;
 }
 
 export function Sidebar({
@@ -75,6 +78,8 @@ export function Sidebar({
   onAdd,
   onOpenSettings,
   isSettingsDisabled,
+  updaterInfo,
+  onCheckUpdate,
 }: SidebarProps) {
   const [isFormOpen, setIsFormOpen] = useState(false);
   const [appVersion, setAppVersion] = useState("");
@@ -130,35 +135,67 @@ export function Sidebar({
       </div>
 
       <div className="px-4 py-2 border-t border-border">
-        <Dialog>
-          <DialogTrigger asChild>
-            <button className="text-xs text-muted hover:text-foreground transition-colors cursor-pointer">
-              v{appVersion}
+        <div className="flex items-center justify-between">
+          <Dialog>
+            <DialogTrigger asChild>
+              <button className="text-xs text-muted hover:text-foreground transition-colors cursor-pointer">
+                v{appVersion}
+              </button>
+            </DialogTrigger>
+            <DialogContent className="max-w-lg bg-[hsl(0,0%,14%)] border-border text-foreground">
+              <DialogHeader>
+                <DialogTitle className="text-foreground">v{appVersion} Changelog</DialogTitle>
+              </DialogHeader>
+              <div className="text-xs space-y-0.5 max-h-[60vh] overflow-y-auto">
+                {changelog.length === 0 ? (
+                  <p className="text-muted-foreground py-2">No git history available</p>
+                ) : (
+                  changelog.map((commit) => (
+                    <div key={commit.hash} className="flex gap-2 items-baseline py-[2px]">
+                      <code className="text-muted-foreground font-mono shrink-0 w-[52px]">
+                        {commit.hash}
+                      </code>
+                      <span className="text-muted-foreground shrink-0 w-[72px]">
+                        {commit.date}
+                      </span>
+                      <CommitSubject subject={commit.subject} />
+                    </div>
+                  ))
+                )}
+              </div>
+            </DialogContent>
+          </Dialog>
+
+          {/* Update button / badge */}
+          {updaterInfo.state === "available" ? (
+            <button
+              onClick={onCheckUpdate}
+              className="flex items-center gap-1 text-xs text-sky-400 hover:text-sky-300 transition-colors cursor-pointer"
+              title={`v${updaterInfo.version} available — click to install`}
+            >
+              <RefreshCw className="h-3 w-3" />
+              v{updaterInfo.version}
             </button>
-          </DialogTrigger>
-          <DialogContent className="max-w-lg bg-[hsl(0,0%,14%)] border-border text-foreground">
-            <DialogHeader>
-              <DialogTitle className="text-foreground">v{appVersion} Changelog</DialogTitle>
-            </DialogHeader>
-            <div className="text-xs space-y-0.5 max-h-[60vh] overflow-y-auto">
-              {changelog.length === 0 ? (
-                <p className="text-muted-foreground py-2">No git history available</p>
-              ) : (
-                changelog.map((commit) => (
-                  <div key={commit.hash} className="flex gap-2 items-baseline py-[2px]">
-                    <code className="text-muted-foreground font-mono shrink-0 w-[52px]">
-                      {commit.hash}
-                    </code>
-                    <span className="text-muted-foreground shrink-0 w-[72px]">
-                      {commit.date}
-                    </span>
-                    <CommitSubject subject={commit.subject} />
-                  </div>
-                ))
-              )}
-            </div>
-          </DialogContent>
-        </Dialog>
+          ) : updaterInfo.state === "downloading" ? (
+            <span className="text-xs text-muted-foreground flex items-center gap-1">
+              <RefreshCw className="h-3 w-3 animate-spin" />
+              {updaterInfo.totalBytes
+                ? `${Math.round((updaterInfo.downloadedBytes / updaterInfo.totalBytes) * 100)}%`
+                : "…"}
+            </span>
+          ) : updaterInfo.state === "checking" ? (
+            <RefreshCw className="h-3 w-3 animate-spin text-muted-foreground" />
+          ) : (
+            <button
+              onClick={onCheckUpdate}
+              className="text-muted hover:text-foreground transition-colors cursor-pointer"
+              title="Check for updates"
+              aria-label="Check for updates"
+            >
+              <RefreshCw className="h-3 w-3" />
+            </button>
+          )}
+        </div>
       </div>
 
       <WorkspaceForm

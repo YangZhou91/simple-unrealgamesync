@@ -9,6 +9,7 @@ import { useSync } from "@/hooks/useSync";
 import { useGit } from "@/hooks/useGit";
 import { useBehindCheck } from "@/hooks/useBehindCheck";
 import { useHistory } from "@/hooks/useHistory";
+import { useUpdater } from "@/hooks/useUpdater";
 import { useState, useCallback, useEffect } from "react";
 import * as commands from "@/lib/commands";
 import type { GitBranchInfo } from "@/lib/types";
@@ -36,6 +37,7 @@ function App() {
   const sync = useSync(onSyncComplete);
   const git = useGit();
   const behind = useBehindCheck();
+  const updater = useUpdater();
   const isSyncRunning = sync.syncState === "running";
   const isOperationRunning =
     isSyncRunning || history.isRollingBack || git.gitState === "running";
@@ -152,6 +154,8 @@ function App() {
             isSettingsDisabled={
               !workspaces.selectedWorkspace || isOperationRunning
             }
+            updaterInfo={updater.info}
+            onCheckUpdate={updater.checkAndInstall}
           />
         }
       >
