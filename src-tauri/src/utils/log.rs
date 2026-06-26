@@ -43,11 +43,12 @@ const RUN_PLACEHOLDER: &str = "——";
 /// `RUN_ID.try_with(...)` with zero line-layout change.
 pub fn build_logger_plugin<R: Runtime>() -> TauriPlugin<R> {
     // D-01/D-02/D-03: file-target formatter owning the uniform line layout.
-    // Closure parameter types are inferred from `Target::format()`'s bound
-    // (`Fn(FormatCallback, &Arguments, &Record) + Send + Sync + 'static`);
-    // do NOT name `fern::FormatCallback` here — `fern` is only a transitive
-    // dep of `tauri-plugin-log`, not an explicit Cargo dep of this crate.
-    let file_formatter = |out, message: &Arguments, record: &Record| {
+    // `FormatCallback` is re-exported by `tauri_plugin_log` (its `fern`
+    // backend), so name it through that path rather than importing `fern`
+    // directly (fern is only a transitive dep, not an explicit Cargo dep).
+    let file_formatter = |out: tauri_plugin_log::fern::FormatCallback,
+                          message: &Arguments,
+                          record: &Record| {
         // D-03: millisecond-precision local timestamp.
         let ts = Local::now().format("%Y-%m-%d %H:%M:%S%.3f");
         // D-01: last `::`-segment of the module path (fallback to target).
@@ -69,6 +70,11 @@ pub fn build_logger_plugin<R: Runtime>() -> TauriPlugin<R> {
     })
     .format(file_formatter);
 
+    // `mut` is only needed under `debug_assertions` for the stdout push below;
+    // in release builds the push is cfg-gated out and rustc would otherwise
+    // emit `unused_mut`. `#[allow(unused_mut)]` keeps both profiles warning-free
+    // without restructuring the dev/release fork.
+    #[allow(unused_mut)]
     let mut targets: Vec<Target> = vec![file_target];
     // D-07: dev-only raw stdout (no formatter) — release ships file-only.
     #[cfg(debug_assertions)]
