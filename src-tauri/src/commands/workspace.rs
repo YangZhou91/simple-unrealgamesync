@@ -3,6 +3,7 @@ use crate::services::p4_executor::{check_exclusion_paths_exist, validate_exclusi
 use crate::services::workspace::WorkspaceService;
 use std::path::Path;
 use tauri::AppHandle;
+use tauri_plugin_log::log::warn;
 
 fn validate_workspace_root(root_path: &str, project_dir: &str) -> Result<(), String> {
     let root = Path::new(root_path);
@@ -124,11 +125,7 @@ pub async fn update_workspace_settings(
     // Attach nonexistent warnings to the response via the error channel
     // Frontend will check for warnings in the response
     if !nonexistent.is_empty() {
-        // Return Ok but log warnings — frontend handles display
-        eprintln!(
-            "[settings] Warning: paths not found: {}",
-            nonexistent.join(", ")
-        );
+        warn!("[settings] paths not found: {}", nonexistent.join(", "));
     }
 
     Ok(updated)

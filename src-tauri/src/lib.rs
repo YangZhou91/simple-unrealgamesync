@@ -13,6 +13,36 @@ use std::sync::Arc;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // D-05: force RUST_BACKTRACE=1 in release BEFORE any panic can fire so
+    // `Backtrace::force_capture()` always yields symbolized frames (not bare
+    // addresses). Runs first — before the hook is installed (Pitfall 3) and
+    // before any subsequent code in `run()` can panic.
+    #[cfg(not(debug_assertions))]
+    std::env::set_var("RUST_BACKTRACE", "1");
+
+    // D-04: panic hook routing the panic location/message plus a captured
+    // backtrace through `log::error!`. Under release the default
+    // `windows_subsystem = "windows"` (main.rs) eats stderr/stdout, so
+    // without this hook a panic leaves zero evidence on disk. RESEARCH.md
+    // Pitfall 4: `log::error!` no-ops cleanly on the default no-op logger
+    // when the hook fires before the plugin attaches — it does NOT panic.
+    // The log::error! call below uses the literal prefix the VALIDATION.md
+    // SC#2 manual check greps for in the emitted log file.
+    std::panic::set_hook(Box::new(|info| {
+        let loc = info
+            .location()
+            .map(|l| format!("{}:{}:{}", l.file(), l.line(), l.column()))
+            .unwrap_or_else(|| "<unknown>".into());
+        let msg = info
+            .payload()
+            .downcast_ref::<&str>()
+            .copied()
+            .or_else(|| info.payload().downcast_ref::<String>().map(|s| s.as_str()))
+            .unwrap_or("<non-string panic payload>");
+        let bt = std::backtrace::Backtrace::force_capture();
+        log::error!("PANIC at {loc}: {msg}\n{bt}");
+    }));
+
     let process_manager = Arc::new(ProcessManager::new());
     let sync_orchestrator = Arc::new(SyncOrchestrator::new(process_manager.clone()));
     let p4_executor = Arc::new(P4Executor::new());
@@ -23,7 +53,7 @@ pub fn run() {
         .plugin(tauri_plugin_store::Builder::default().build())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
-        .plugin(tauri_plugin_log::Builder::default().build())
+        .plugin(utils::log::build_logger_plugin())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(sync_orchestrator)
