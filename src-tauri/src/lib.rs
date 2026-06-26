@@ -20,12 +20,14 @@ pub fn run() {
     #[cfg(not(debug_assertions))]
     std::env::set_var("RUST_BACKTRACE", "1");
 
-    // D-04: panic hook routing `PANIC at <file>:<line>:<col>: <msg>` plus a
-    // captured backtrace through `log::error!`. Under release the default
+    // D-04: panic hook routing the panic location/message plus a captured
+    // backtrace through `log::error!`. Under release the default
     // `windows_subsystem = "windows"` (main.rs) eats stderr/stdout, so
     // without this hook a panic leaves zero evidence on disk. RESEARCH.md
     // Pitfall 4: `log::error!` no-ops cleanly on the default no-op logger
     // when the hook fires before the plugin attaches — it does NOT panic.
+    // The log::error! call below uses the literal prefix the VALIDATION.md
+    // SC#2 manual check greps for in the emitted log file.
     std::panic::set_hook(Box::new(|info| {
         let loc = info
             .location()
