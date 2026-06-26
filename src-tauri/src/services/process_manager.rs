@@ -1,4 +1,5 @@
 use crate::error::AppError;
+use tauri_plugin_log::log::warn;
 use tokio::process::Command;
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
@@ -79,11 +80,7 @@ impl ProcessManager {
 
             if !output.status.success() {
                 let stderr = String::from_utf8_lossy(&output.stderr);
-                eprintln!(
-                    "Warning: taskkill /F /T /PID {} failed: {}",
-                    pid,
-                    stderr.trim()
-                );
+                warn!("taskkill /F /T /PID {} failed: {}", pid, stderr.trim());
             }
         }
 
@@ -117,11 +114,7 @@ impl ProcessManager {
                 .map_err(AppError::ProcessSpawn)?;
             if !output.status.success() {
                 let stderr = String::from_utf8_lossy(&output.stderr);
-                eprintln!(
-                    "Warning: taskkill /F /T /PID {} failed: {}",
-                    pid,
-                    stderr.trim()
-                );
+                warn!("taskkill /F /T /PID {} failed: {}", pid, stderr.trim());
             }
         }
 
