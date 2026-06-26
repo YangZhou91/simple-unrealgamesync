@@ -3782,6 +3782,7 @@ name = "simple-unrealgamesync"
 version = "1.3.4"
 dependencies = [
  "chrono",
+ "log",
  "serde",
  "serde_json",
  "tauri",
