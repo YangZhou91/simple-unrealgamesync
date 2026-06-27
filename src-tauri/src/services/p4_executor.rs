@@ -1400,8 +1400,8 @@ mod tests {
             // Should not take longer than 9 seconds (8s timeout + overhead)
             assert!(
                 elapsed < Duration::from_secs(9),
-                "check_connectivity took {:?}, expected <9s",
-                elapsed
+                "check_connectivity took {}ms, expected <9000ms",
+                elapsed.as_millis()
             );
         });
     }
