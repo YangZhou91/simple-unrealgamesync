@@ -85,6 +85,16 @@ pub fn build_logger_plugin<R: Runtime>() -> TauriPlugin<R> {
         .rotation_strategy(RotationStrategy::KeepSome(5))
         .max_file_size(5_000_000)
         .timezone_strategy(TimezoneStrategy::UseLocal)
+        // `timezone_strategy` (and `Builder::new`) OVERWRITE `dispatch.format`
+        // with a global `{ts}[{level}][{target}] {msg}` formatter that pre-formats
+        // every record BEFORE our per-target `file_formatter` runs — yielding a
+        // doubly-formatted line (D-01 violation, ~75 chars of redundant nested
+        // prefix per line). `clear_format` resets the global format to passthrough
+        // `{message}` so only `file_formatter` owns the line layout. It MUST run
+        // AFTER `timezone_strategy` (later `.format(...)` setter wins); the call
+        // itself stays because `acquire_logger` passes `timezone_strategy` to the
+        // `RotatingFile` for dated rotation filenames.
+        .clear_format()
         .level(log::LevelFilter::Debug)
         // D-06: silence known-chatty transport/webview crates so business
         // lines stay readable at global Debug.
