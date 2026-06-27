@@ -138,7 +138,7 @@ fn redact_with_username_row<'a>(
     // lifetimes line up (10-RESEARCH.md Pitfall 4 — Cow lifetime churn).
     let mut cur: Cow<'a, str> = Cow::Borrowed(s);
     for (re, tok) in patterns() {
-        cur = apply_one(cur, re, *tok);
+        cur = apply_one(cur, re, tok);
     }
     if let Some((re, tok)) = user_row {
         cur = apply_one(cur, re, tok);

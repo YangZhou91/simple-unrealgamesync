@@ -99,6 +99,14 @@ pub fn build_logger_plugin<R: Runtime>() -> TauriPlugin<R> {
         // value. `{ts} {body}` is byte-identical to inlining the four body
         // fields directly into this `format_args!`.
         let body = format_line_body(module, record.level(), RUN_PLACEHOLDER, message);
+        // ★ Phase 10: redact the assembled body before it hits disk (D-05 net).
+        // redact() returns Cow::Borrowed on no-match (zero-alloc fast path); the
+        // common case (a line with no sensitive content) pays nothing. This is
+        // the ONLY layer that protects Display/error-chain/panic paths — those
+        // render to a message string BEFORE any struct is involved, so only the
+        // net catches them (e.g. panic-hook backtrace paths). File-target only:
+        // the dev Stdout target below has no formatter and stays raw (D-07).
+        let body = crate::utils::redact::redact(&body);
         out.finish(format_args!("{ts} {body}", ts = ts, body = body));
     };
 
@@ -252,6 +260,40 @@ mod tests {
         assert_eq!(
             format_line_body("m", log::Level::Trace, "——", "x"),
             "TRACE m: [run=——] x"
+        );
+    }
+
+    // ---- Phase 10: file_formatter redaction wiring (SC#4) ----
+
+    #[test]
+    fn file_formatter_redaction_masks_path_in_body() {
+        // The file_formatter closure redacts the body AFTER format_line_body
+        // assembles it and BEFORE out.finish (the SC#4 file-target-only seam).
+        // This test exercises the same redact() call the closure makes, on a
+        // body carrying a sensitive path, and confirms the layout survives
+        // intact while the path is masked. The 8 Phase 9 layout tests above
+        // stay byte-identical because redact() returns Cow::Borrowed for their
+        // clean inputs.
+        let body = format_line_body(
+            "sync_orchestrator",
+            log::Level::Info,
+            "——",
+            "[sync] path=C:\\Users\\alice\\FYGame",
+        );
+        let masked = crate::utils::redact::redact(&body);
+        assert!(
+            masked.contains("<PATH>"),
+            "redaction must mask the path in the assembled body (got {masked:?})"
+        );
+        assert!(
+            !masked.contains("alice"),
+            "redaction must not leak the username (got {masked:?})"
+        );
+        // The [run=——] layout bytes are structural (no user data) and must
+        // survive redaction untouched.
+        assert!(
+            masked.contains("[run=——]"),
+            "redaction must preserve the [run=——] layout slot (got {masked:?})"
         );
     }
 }
