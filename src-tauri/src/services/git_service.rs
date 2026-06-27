@@ -209,7 +209,13 @@ impl GitService {
             });
             let _ = channel.send(SyncEvent::SyncFailed {
                 step: "gitPull".to_string(),
-                error: format!("git pull failed with exit code {:?}", status.code()),
+                error: format!(
+                    "git pull failed with exit code {}",
+                    status
+                        .code()
+                        .map(|c| c.to_string())
+                        .unwrap_or_else(|| "none".to_string())
+                ),
             });
             return Err(AppError::CommandFailed {
                 step: "gitPull".to_string(),
@@ -409,8 +415,11 @@ impl GitService {
 
         if !status.success() {
             error!(
-                "[gitPull/genProject] failed with exit code {:?}",
-                status.code()
+                "[gitPull/genProject] failed with exit code {}",
+                status
+                    .code()
+                    .map(|c| c.to_string())
+                    .unwrap_or_else(|| "none".to_string())
             );
             let _ = channel.send(SyncEvent::StepCompleted {
                 step: "genProject".to_string(),
@@ -419,8 +428,11 @@ impl GitService {
             let _ = channel.send(SyncEvent::SyncFailed {
                 step: "genProject".to_string(),
                 error: format!(
-                    "GenerateProjectFiles failed with exit code {:?}",
-                    status.code()
+                    "GenerateProjectFiles failed with exit code {}",
+                    status
+                        .code()
+                        .map(|c| c.to_string())
+                        .unwrap_or_else(|| "none".to_string())
                 ),
             });
             return Err(AppError::CommandFailed {

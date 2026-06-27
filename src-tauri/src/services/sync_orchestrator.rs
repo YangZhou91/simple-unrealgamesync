@@ -152,8 +152,8 @@ impl SyncOrchestrator {
 
         // Step 3: p4 sync
         info!(
-            "[sync] step=p4Sync starting, target_cl={:?}",
-            options.target_cl
+            "[sync] step=p4Sync starting, target_cl={}",
+            options.target_cl.as_deref().unwrap_or("none")
         );
         let cancel_token = CancellationToken::new();
         self.process_manager
