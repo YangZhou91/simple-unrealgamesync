@@ -16,12 +16,33 @@ use std::os::windows::process::CommandExt as _;
 #[cfg(target_os = "windows")]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 
-#[derive(Debug, Serialize, Clone)]
+#[derive(Serialize, Clone)]
 pub struct GitStatusInfo {
     pub branch: String,
     pub ahead: u32,
     pub behind: u32,
     pub remote: String,
+}
+
+/// Manual `Debug` for `GitStatusInfo` — the REDACT-06 / D-05 defense-in-depth
+/// backstop.
+///
+/// Today `remote` is populated from `git remote` output (git_service.rs
+/// ~line 252-263) and holds the remote NAME (e.g. `"origin"`), NOT a URL — so
+/// it does not today carry embedded credentials. However: (a) the field is a
+/// `String` and could hold a URL if the population code changes, and (b) the
+/// D-02 regex still matters for any git URL appearing in error messages /
+/// future instrumentation. Mask `remote` defensively per D-05; keep
+/// `branch` / `ahead` / `behind` so `Debug` remains useful.
+impl std::fmt::Debug for GitStatusInfo {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("GitStatusInfo")
+            .field("branch", &self.branch)
+            .field("ahead", &self.ahead)
+            .field("behind", &self.behind)
+            .field("remote", &"<redacted>")
+            .finish()
+    }
 }
 
 pub struct GitService {
@@ -488,4 +509,48 @@ async fn run_git(dir: &Path, args: &[&str]) -> Result<std::process::Output, AppE
         .map_err(AppError::ProcessSpawn);
 
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ---- SC#2: manual Debug does not leak remote (REDACT-06 / D-05 backstop) ----
+
+    #[test]
+    fn git_status_info_debug_does_not_leak_remote() {
+        // The format-layer redact() net is the audited boundary (Wave 1); this
+        // struct-level Debug is the pragmatic backstop. Use a URL-shaped remote
+        // (worst case: embedded creds) to prove the mask holds regardless of
+        // what the `remote` field happens to carry.
+        let gsi = GitStatusInfo {
+            branch: "main".into(),
+            ahead: 1,
+            behind: 0,
+            remote: "https://alice:token@github.com/EpicGames/UnrealEngine.git".into(),
+        };
+        let dbg = format!("{:?}", gsi);
+        assert!(!dbg.contains("alice"), "Debug leaked username: {dbg}");
+        assert!(!dbg.contains("token"), "Debug leaked credential: {dbg}");
+        assert!(dbg.contains("GitStatusInfo"), "Debug must still identify the type");
+        assert!(dbg.contains("main"), "Debug must keep branch (non-identity)");
+    }
+
+    #[test]
+    fn git_status_info_debug_keeps_counts() {
+        // Regression: prove KEEP fields are retained (not over-masking).
+        let gsi = GitStatusInfo {
+            branch: "release".into(),
+            ahead: 7,
+            behind: 3,
+            remote: "origin".into(),
+        };
+        let dbg = format!("{:?}", gsi);
+        assert!(dbg.contains("7"));
+        assert!(dbg.contains("3"));
+        assert!(dbg.contains("release"));
+        // The remote NAME "origin" is masked even though today it's harmless —
+        // the mask is defensive against future URL-shaped values.
+        assert!(!dbg.contains("origin"));
+    }
 }
