@@ -5,11 +5,19 @@ use thiserror::Error;
 pub enum AppError {
     #[error("Process spawn failed: {0}")]
     ProcessSpawn(#[from] std::io::Error),
+    /// SC#3 allowlist: `exit_code` is `Option<i32>` (a non-sensitive process exit
+    /// code — an integer, NOT identity/path/credential). `{:?}` is the only way to
+    /// render `Option<i32>` in thiserror's `#[error]` (format! semantics, no
+    /// Display). Kept per D-04 documented allowlist. The Wave 1 `redact()` net
+    /// masks any path this Display renders when the error is logged via `{e}`.
     #[error("Command '{step}' failed with exit code: {exit_code:?}")]
     CommandFailed {
         step: String,
         exit_code: Option<i32>,
     },
+    /// SC#3 allowlist: `P4Command` wraps `Option<i32>` exit code (non-sensitive
+    /// integer, NOT identity/path/credential). `{:?}` is the only Display-free
+    /// render in thiserror's `#[error]`. Kept per D-04 documented allowlist.
     #[error("P4 command failed with exit code: {0:?}")]
     P4Command(Option<i32>),
     #[error("Store error: {0}")]

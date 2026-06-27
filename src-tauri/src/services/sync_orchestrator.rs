@@ -240,7 +240,10 @@ impl SyncOrchestrator {
         } else {
             self.p4.get_have_changelist(&workspace).await.ok().flatten()
         };
-        info!("[sync] pipeline complete, cl={cl:?}, files={files_synced}");
+        info!(
+            "[sync] pipeline complete, cl={}, files={files_synced}",
+            cl.as_deref().unwrap_or("none")
+        );
         let _ = channel.send(SyncEvent::SyncCompleted {
             changelist: cl.clone(),
             files_synced,
