@@ -37,7 +37,7 @@ where
     Ok(v.clamp(5, 1440))
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct WorkspaceConfig {
     pub id: String,
     pub name: String,
@@ -69,6 +69,36 @@ pub struct WorkspaceConfig {
         deserialize_with = "clamp_interval_minutes"
     )]
     pub interval_minutes: u32,
+}
+
+/// Manual `Debug` for `WorkspaceConfig` — the REDACT-06 / D-05 defense-in-depth
+/// backstop.
+///
+/// Per D-05, the format-layer `redact()` net (Wave 1, `utils/redact.rs`) is the
+/// audited security boundary and the ONLY layer that protects
+/// Display / error-chain / panic / `io::Error` paths (they render to a string
+/// before any struct is involved). This struct-level `Debug` is a pragmatic,
+/// testable backstop that masks the OBVIOUS sensitive fields (`name`,
+/// `root_path`, `p4_client`, `p4_user`) so `{:?}` formatting cannot leak them
+/// even before the net sees the rendered string. Non-identity fields are kept
+/// so `Debug` remains useful (e.g. `parallel_threads`, `exclusions`).
+impl std::fmt::Debug for WorkspaceConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("WorkspaceConfig")
+            .field("id", &self.id)
+            .field("name", &"<redacted>")
+            .field("root_path", &"<redacted>")
+            .field("project_dir", &self.project_dir)
+            .field("p4_client", &"<redacted>")
+            .field("p4_user", &"<redacted>")
+            .field("last_sync_cl", &self.last_sync_cl)
+            .field("last_sync_time", &self.last_sync_time)
+            .field("last_sync_file_count", &self.last_sync_file_count)
+            .field("parallel_threads", &self.parallel_threads)
+            .field("exclusions", &self.exclusions)
+            .field("interval_minutes", &self.interval_minutes)
+            .finish()
+    }
 }
 
 #[cfg(test)]
@@ -251,5 +281,27 @@ mod tests {
         }"#;
         let config: WorkspaceConfig = serde_json::from_str(json).unwrap();
         assert_eq!(config.interval_minutes, 30);
+    }
+
+    // ---- SC#2: manual Debug does not leak identity (REDACT-06 / D-05 backstop) ----
+
+    #[test]
+    fn debug_does_not_leak_identity() {
+        // The format-layer redact() net is the audited boundary (Wave 1); this
+        // struct-level Debug is the pragmatic backstop. It MUST mask the obvious
+        // identity fields (name/root_path/p4_client/p4_user) so `{:?}` formatting
+        // cannot leak them even before the net sees the rendered string.
+        let ws = crate::utils::redact::test_workspace_fixture();
+        let dbg = format!("{:?}", ws);
+        assert!(!dbg.contains("alice"), "Debug leaked username: {dbg}");
+        assert!(
+            !dbg.contains("alice-laptop-fygame"),
+            "Debug leaked p4_client: {dbg}"
+        );
+        assert!(!dbg.contains(r"C:\Users"), "Debug leaked root_path: {dbg}");
+        assert!(
+            dbg.contains("WorkspaceConfig"),
+            "Debug must still identify the type"
+        );
     }
 }
