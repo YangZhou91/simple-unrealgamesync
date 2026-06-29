@@ -7,6 +7,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tauri::ipc::Channel;
 use tauri_plugin_log::log::{error, info, warn};
+use crate::utils::log::{render_cancelled_line, render_exited_line};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio_util::sync::CancellationToken;
 
@@ -147,9 +148,31 @@ impl GitService {
             .spawn()
             .map_err(AppError::ProcessSpawn)?;
 
-        // Track PID
+        // Track PID + capture spawn_start for the process.exited/cancelled
+        // elapsed values (git_service's wait is a plain child.wait() + post-hoc
+        // cancel_token check, NOT a tokio::select! — see PATTERNS Pattern B).
+        let spawn_start = std::time::Instant::now();
         if let Some(id) = child.id() {
             self.process_manager.track_pid(id).await;
+        }
+
+        // INSTR-09 / D-09 / D-10: process.spawned at the track_pid site. git
+        // pull has no identity-adjacent flags (arg vector is just `["pull"]`),
+        // but `current_dir` embeds root_path — route cwd through the redact net
+        // (Phase-10 Users-home pattern masks the prefix). The D-08 safeguard is
+        // inline here (git has no p4-style client flag, so render_spawned_line's
+        // p4-shaped prefix does not apply). Bound to named locals so the borrows
+        // outlive the format!() / redact() expression statements.
+        {
+            let cwd_lossy = ue_path.to_string_lossy();
+            let cwd_redacted = crate::utils::redact::redact(&cwd_lossy).into_owned();
+            let line = format!("git pull (cwd={})", cwd_redacted);
+            let safe = crate::utils::redact::redact(&line);
+            info!(
+                "process.spawned pid={} cmd=\"{}\"",
+                child.id().unwrap_or(0),
+                safe
+            );
         }
 
         // Stream stdout
@@ -187,11 +210,34 @@ impl GitService {
         stdout_task.abort();
         stderr_task.abort();
 
+        // INSTR-09 / D-09: process.exited — emits on BOTH success and the
+        // post-hoc cancel branch (git_service does wait-then-check, not a
+        // select!, so the normal exit line fires before the cancel signal).
+        info!(
+            "{}",
+            render_exited_line(
+                child.id().unwrap_or(0),
+                status.code(),
+                spawn_start.elapsed().as_millis()
+            )
+        );
+
         // Handle cancellation
         if cancel_token.is_cancelled() {
             if had_stash {
                 let _ = restore_stash(&ue_path, channel).await;
             }
+            // INSTR-09 / D-09: process.cancelled — the distinct cancel signal
+            // INSTR-09 names; the post-hoc check fires AFTER the exited line
+            // above, so both an exited and a cancelled line emit on cancel
+            // (PATTERNS Pattern B adaptation — git's wait-then-check shape).
+            info!(
+                "{}",
+                render_cancelled_line(
+                    child.id().unwrap_or(0),
+                    spawn_start.elapsed().as_millis()
+                )
+            );
             let _ = channel.send(SyncEvent::SyncCancelled {
                 step: "gitPull".to_string(),
             });
@@ -376,8 +422,31 @@ impl GitService {
             .spawn()
             .map_err(AppError::ProcessSpawn)?;
 
+        // Capture spawn_start for the process.exited elapsed value.
+        // genProject in this code path is non-cancellable (no select! / no
+        // cancel_token check) — only the exited line fires below.
+        let spawn_start = std::time::Instant::now();
         if let Some(id) = child.id() {
             self.process_manager.track_pid(id).await;
+        }
+
+        // INSTR-09 / D-09 / D-10: process.spawned at the track_pid site. The
+        // arg vector `["/C", <bat_path>]` embeds root_path; route bat_path +
+        // work_dir through redact (Phase-10 Users-home pattern masks the prefix)
+        // — D-08 safeguard for git_service's genProject spawn. Bound to a named
+        // local so the borrow outlives the format!() expression statement.
+        {
+            let line = format!(
+                "cmd /C {} (cwd={})",
+                bat_path.to_string_lossy(),
+                work_dir.to_string_lossy()
+            );
+            let safe = crate::utils::redact::redact(&line);
+            info!(
+                "process.spawned pid={} cmd=\"{}\"",
+                child.id().unwrap_or(0),
+                safe
+            );
         }
 
         let stdout = child.stdout.take().unwrap();
@@ -412,6 +481,19 @@ impl GitService {
         // servers that inherit the pipe handles and keep them open forever.
         stdout_task.abort();
         stderr_task.abort();
+
+        // INSTR-09 / D-09: process.exited — always fires (before success check)
+        // so the genProject terminal lifecycle line emits on both success and
+        // failure. No cancel arm here (genProject is non-cancellable in this
+        // code path) — only the exited line.
+        info!(
+            "{}",
+            render_exited_line(
+                child.id().unwrap_or(0),
+                status.code(),
+                spawn_start.elapsed().as_millis()
+            )
+        );
 
         if !status.success() {
             error!(
