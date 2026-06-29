@@ -325,12 +325,11 @@ impl SyncOrchestrator {
         let workspace = WorkspaceService::get(&app, &workspace_id).await?;
 
         // Network pre-check (silent -- not a StepIndicator step)
-        info!(
-            "[sync] workspace={}, step=networkCheck starting",
-            workspace.name
-        );
+        info!("[sync] workspace={}", workspace.name);
+        let step = StepScope::new("networkCheck");
         if let Err(e) = self.p4.check_connectivity(&workspace).await {
             error!("[sync] step=networkCheck failed: {e}");
+            step.failed();
             let _ = channel.send(SyncEvent::SyncFailed {
                 step: "networkCheck".to_string(),
                 error: e.to_string(),
@@ -344,7 +343,7 @@ impl SyncOrchestrator {
             );
             return Err(e);
         }
-        info!("[sync] step=networkCheck done");
+        step.done("");
         let _ = app.emit(
             "sync-state",
             SyncStatePayload {
@@ -354,7 +353,9 @@ impl SyncOrchestrator {
         );
 
         // Step 1: Close UE Editor
+        let step = StepScope::new("closeUe");
         if let Err(e) = self.close_ue(&channel).await {
+            step.failed();
             let _ = channel.send(SyncEvent::SyncFailed {
                 step: "closeUe".to_string(),
                 error: e.to_string(),
@@ -368,8 +369,11 @@ impl SyncOrchestrator {
             );
             return Err(e);
         }
+        step.done("");
 
         // Step 2: p4 sync @CL (NO clean_dev_dir -- D-06)
+        let step = StepScope::new("p4Sync");
+        info!("[sync] target_cl={}", target_cl);
         let cancel_token = CancellationToken::new();
         self.process_manager
             .set_cancel_token(cancel_token.clone())
@@ -388,6 +392,7 @@ impl SyncOrchestrator {
 
         if let Err(e) = files_result {
             if matches!(e, AppError::Cancelled) {
+                step.cancelled();
                 let _ = channel.send(SyncEvent::SyncCancelled {
                     step: "p4Sync".to_string(),
                 });
@@ -400,6 +405,7 @@ impl SyncOrchestrator {
                 );
                 return Ok(());
             }
+            step.failed();
             let _ = channel.send(SyncEvent::SyncFailed {
                 step: "p4Sync".to_string(),
                 error: e.to_string(),
@@ -414,9 +420,10 @@ impl SyncOrchestrator {
             return Err(e);
         }
         let files_synced = files_result.unwrap();
+        step.done(&format!("files_synced={files_synced}"));
 
         // Step 2b: Force sync Engine files (non-fatal, per D-04)
-        info!("[sync-rollback] step=forceSync starting");
+        let step = StepScope::new("forceSync");
         let force_cancel = CancellationToken::new();
         self.process_manager
             .set_cancel_token(force_cancel.clone())
@@ -425,10 +432,12 @@ impl SyncOrchestrator {
             .force_sync_engine_step(&workspace, &channel, force_cancel)
             .await;
         self.process_manager.clear_tracked().await;
-        info!("[sync-rollback] step=forceSync done");
+        step.done("");
 
         // Step 3: GenerateProjectFiles
+        let step = StepScope::new("genProject");
         if let Err(e) = self.gen_project(&workspace, &channel).await {
+            step.failed();
             let _ = channel.send(SyncEvent::SyncFailed {
                 step: "genProject".to_string(),
                 error: e.to_string(),
@@ -442,6 +451,7 @@ impl SyncOrchestrator {
             );
             return Err(e);
         }
+        step.done("");
 
         let cl = Some(target_cl.clone());
         let _ = channel.send(SyncEvent::SyncCompleted {
@@ -518,9 +528,28 @@ impl SyncOrchestrator {
         let workspace = WorkspaceService::get(&app, &workspace_id).await?;
 
         match step.as_str() {
-            "closeUe" => self.close_ue(&channel).await?,
-            "cleanDevDir" => self.clean_dev_dir(&workspace, &channel).await?,
+            "closeUe" => {
+                let s = StepScope::new("closeUe");
+                match self.close_ue(&channel).await {
+                    Ok(()) => s.done(""),
+                    Err(e) => {
+                        s.failed();
+                        return Err(e);
+                    }
+                }
+            }
+            "cleanDevDir" => {
+                let s = StepScope::new("cleanDevDir");
+                match self.clean_dev_dir(&workspace, &channel).await {
+                    Ok(()) => s.done(""),
+                    Err(e) => {
+                        s.failed();
+                        return Err(e);
+                    }
+                }
+            }
             "p4Sync" => {
+                let s = StepScope::new("p4Sync");
                 let options = SyncOptions {
                     target_cl: target_cl.clone(),
                     parallel_threads: workspace.parallel_threads,
@@ -534,10 +563,30 @@ impl SyncOrchestrator {
                     .p4_sync(&workspace, &channel, cancel_token, &options)
                     .await;
                 self.process_manager.clear_tracked().await;
-                result?;
+                match result {
+                    Ok(n) => s.done(&format!("files_synced={n}")),
+                    Err(AppError::Cancelled) => {
+                        s.cancelled();
+                        return Err(AppError::Cancelled);
+                    }
+                    Err(e) => {
+                        s.failed();
+                        return Err(e);
+                    }
+                }
             }
-            "genProject" => self.gen_project(&workspace, &channel).await?,
+            "genProject" => {
+                let s = StepScope::new("genProject");
+                match self.gen_project(&workspace, &channel).await {
+                    Ok(()) => s.done(""),
+                    Err(e) => {
+                        s.failed();
+                        return Err(e);
+                    }
+                }
+            }
             "forceSync" => {
+                let s = StepScope::new("forceSync");
                 let cancel_token = CancellationToken::new();
                 self.process_manager
                     .set_cancel_token(cancel_token.clone())
@@ -546,6 +595,7 @@ impl SyncOrchestrator {
                     .force_sync_engine_step(&workspace, &channel, cancel_token)
                     .await;
                 self.process_manager.clear_tracked().await;
+                s.done("");
             }
             _ => return Err(AppError::Process(format!("Unknown step: {}", step))),
         }
