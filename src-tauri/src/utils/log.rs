@@ -89,6 +89,185 @@ pub fn scope_run_sync<T>(f: impl FnOnce() -> T) -> T {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Phase 11 INSTR-10: command-boundary trace wrappers (entry + exit bookends).
+// ---------------------------------------------------------------------------
+//
+// `trace_command` (async, Result-aware) / `trace_command_sync` (sync,
+// Result-aware) / `trace_command_sync_ok` (sync, non-Result) wrap a
+// `#[tauri::command]` body so the entry `cmd=<name> starting args=...` and the
+// exit `cmd=<name> ok|err elapsed=...ms` lines fire on EVERY return path
+// (including `?` early-returns — the body is a future/closure; completing it
+// is the only way out, and the wrapper owns both bookends). The err-exit line
+// renders `redact(&e.to_string())` (Display, NEVER `{:?}` — SC#3 gate).
+//
+// The line-building is factored into the private `cmd_*_line` helpers below so
+// the bookend shapes have deterministic unit-test coverage independent of the
+// non-deterministic elapsed value and the tauri-plugin-log capture harness.
+
+/// Build the `cmd=<name> starting args=<args>` entry line (D-16).
+fn cmd_entry_line(name: &str, args_redacted: &str) -> String {
+    format!("[cmd] {name} starting args={args_redacted}")
+}
+
+/// Build the `cmd=<name> ok elapsed=<ms>ms` exit line (D-16, D-13 `{}`ms).
+fn cmd_exit_ok_line(name: &str, elapsed_ms: u128) -> String {
+    format!("[cmd] {name} ok elapsed={elapsed_ms}ms")
+}
+
+/// Build the `cmd=<name> err elapsed=<ms>ms error=<redacted>` exit line (D-16).
+/// `err_display_redacted` MUST already be routed through `redact()` by the
+/// caller (the wrapper does this for the AppError Display path).
+fn cmd_exit_err_line(name: &str, elapsed_ms: u128, err_display_redacted: &str) -> String {
+    format!("[cmd] {name} err elapsed={elapsed_ms}ms error={err_display_redacted}")
+}
+
+/// Phase 11 INSTR-10 / D-15: async Result-aware command-boundary wrapper.
+///
+/// Wraps a `#[tauri::command]` body future: sets/reuses RUN_ID via `scope_run`,
+/// emits the entry line on start, awaits the body, and emits the ok/err exit
+/// line with elapsed on EVERY return path. Because the body is a future, every
+/// `?` early-return and explicit `return` inside it completes the future — the
+/// wrapper's post-`await` exit line cannot be skipped (D-15 structural
+/// guarantee). The err branch renders `redact(&e.to_string())` (Display only —
+/// SC#3 gate, T-11-PII-2 mitigation).
+pub async fn trace_command<F, T, E>(
+    name: &'static str,
+    args_redacted: String,
+    fut: F,
+) -> Result<T, E>
+where
+    F: std::future::Future<Output = Result<T, E>>,
+    E: std::fmt::Display,
+{
+    scope_run(async move {
+        let start = Instant::now();
+        info!("{}", cmd_entry_line(name, &args_redacted));
+        match fut.await {
+            Ok(v) => {
+                info!("{}", cmd_exit_ok_line(name, start.elapsed().as_millis()));
+                Ok(v)
+            }
+            Err(e) => {
+                let e_display = e.to_string();
+                let safe = crate::utils::redact::redact(&e_display);
+                info!(
+                    "{}",
+                    cmd_exit_err_line(name, start.elapsed().as_millis(), &safe)
+                );
+                Err(e)
+            }
+        }
+    })
+    .await
+}
+
+/// Phase 11 INSTR-10 / D-15: sync Result-aware command-boundary wrapper.
+///
+/// The sync twin of `trace_command` for the non-async Result-returning
+/// commands (`validate_exclusions`). Same bookend contract via `scope_run_sync`
+/// and the same err-line redaction (Display, never `{:?}`).
+pub fn trace_command_sync<T, E>(
+    name: &'static str,
+    args_redacted: String,
+    f: impl FnOnce() -> Result<T, E>,
+) -> Result<T, E>
+where
+    E: std::fmt::Display,
+{
+    scope_run_sync(|| {
+        let start = Instant::now();
+        info!("{}", cmd_entry_line(name, &args_redacted));
+        match f() {
+            Ok(v) => {
+                info!("{}", cmd_exit_ok_line(name, start.elapsed().as_millis()));
+                Ok(v)
+            }
+            Err(e) => {
+                let e_display = e.to_string();
+                let safe = crate::utils::redact::redact(&e_display);
+                info!(
+                    "{}",
+                    cmd_exit_err_line(name, start.elapsed().as_millis(), &safe)
+                );
+                Err(e)
+            }
+        }
+    })
+}
+
+/// Phase 11 INSTR-10 / D-15: sync non-Result command-boundary wrapper.
+///
+/// For the one sync command that returns `bool` and cannot fail
+/// (`is_sync_running`). Same entry/ok-exit bookend contract; no err branch
+/// (`bool` has no error path). Uses `scope_run_sync` so RUN_ID is set/reused.
+pub fn trace_command_sync_ok<T>(
+    name: &'static str,
+    args_redacted: String,
+    f: impl FnOnce() -> T,
+) -> T {
+    scope_run_sync(|| {
+        let start = Instant::now();
+        info!("{}", cmd_entry_line(name, &args_redacted));
+        let v = f();
+        info!("{}", cmd_exit_ok_line(name, start.elapsed().as_millis()));
+        v
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Phase 11 INSTR-09: process-lifecycle render helpers (D-07/D-08/D-09/D-10).
+// ---------------------------------------------------------------------------
+//
+// `render_spawned_line` / `render_exited_line` / `render_cancelled_line`
+// produce the diagnostic line text that the 4 business-process spawn sites
+// (p4 sync, p4 force-sync, git pull, genProject) emit at `track_pid` and at
+// the `tokio::select!` exit/cancel arms. Rendering is pure (no logging) so the
+// line shape has deterministic unit-test coverage and so callers can emit via
+// their local `info!` import. The D-08 safeguard (pre-mask bare client +
+// redact root_path, then redact the whole assembled string) lives in
+// `render_spawned_line` — the load-bearing PII mitigation (T-11-PII).
+
+/// Phase 11 INSTR-09 / D-08 safeguard: render `process.spawned pid=<pid>
+/// cmd="<safe>"`.
+///
+/// The D-08 redact-gap safeguard (RESEARCH Key Rec (c)): the bare `-c
+/// <P4CLIENT>` flag is pre-masked to the literal token (the Phase 10 catalog
+/// catches only the tagged `P4CLIENT=` form, not the bare token in the arg
+/// vector — see 11-RESEARCH.md §(c)); `root_path` is routed through `redact()`
+/// first (Users-home caught, tail preserved); then the whole assembled command
+/// string is routed through `redact()` again so depot paths (`//FYGame/...`),
+/// tagged values, and any unexpected path are net-caught. The underlying
+/// catalog gap is flagged as a Phase 10 follow-up (CONTEXT boundary — not
+/// fixed here).
+pub fn render_spawned_line(pid: u32, root_path: &str, p4_args_joined: &str) -> String {
+    let masked_root = crate::utils::redact::redact(root_path);
+    let assembled = format!(
+        "p4 -I -C utf8 -c <P4CLIENT> -d {} {}",
+        masked_root, p4_args_joined
+    );
+    let safe = crate::utils::redact::redact(&assembled);
+    format!("process.spawned pid={pid} cmd=\"{safe}\"")
+}
+
+/// Phase 11 INSTR-09 / D-09: render `process.exited pid=<pid> code=<n|none>
+/// elapsed=<ms>ms`. The `Option<i32>` exit code renders via the
+/// `.map(|c| c.to_string()).unwrap_or_else(|| "none".to_string())` shim —
+/// NEVER `{:?}` (SC#3 gate; the error.rs `{0:?}` allowlist is ONLY for the two
+/// `#[error]` attrs, not for new log sites).
+pub fn render_exited_line(pid: u32, code: Option<i32>, elapsed_ms: u128) -> String {
+    let code_str = code
+        .map(|c| c.to_string())
+        .unwrap_or_else(|| "none".to_string());
+    format!("process.exited pid={pid} code={code_str} elapsed={elapsed_ms}ms")
+}
+
+/// Phase 11 INSTR-09 / D-09: render `process.cancelled pid=<pid>
+/// signal=<kill> elapsed=<ms>ms`.
+pub fn render_cancelled_line(pid: u32, elapsed_ms: u128) -> String {
+    format!("process.cancelled pid={pid} signal=<kill> elapsed={elapsed_ms}ms")
+}
+
 /// D-01: reduce a full Rust module path to its last `::`-segment.
 ///
 /// Given e.g. `"simple_unrealgamesync_lib::services::sync_orchestrator"` this
@@ -392,6 +571,147 @@ mod tests {
             .ok()
             .unwrap_or_else(|| RUN_PLACEHOLDER.to_string());
         assert_eq!(outside, "——", "outside any scope the slot is RUN_PLACEHOLDER");
+    }
+
+    // ---- Phase 11: INSTR-09/10 command + process-lifecycle helpers ----
+
+    #[tokio::test]
+    async fn trace_command_emits_bookend_ok() {
+        // INSTR-10 / D-15: the wrapper returns Ok(value) and the entry/exit
+        // line shapes match the factored cmd_*_line seam (elapsed is non-
+        // deterministic; assert the prefix and the trailing `ms`).
+        let args = "x=1".to_string();
+        let v: Result<i32, std::io::Error> =
+            trace_command("dummy_ok", args.clone(), async move { Ok(7) }).await;
+        assert_eq!(v.unwrap(), 7);
+        // Pin the entry/ok-exit line shapes via the factored seam (deterministic
+        // elapsed = 0 is fine for the shape check; trace_command uses the same
+        // cmd_*_line builders).
+        assert_eq!(cmd_entry_line("dummy_ok", &args), "[cmd] dummy_ok starting args=x=1");
+        let exit = cmd_exit_ok_line("dummy_ok", 123);
+        assert!(exit.starts_with("[cmd] dummy_ok ok elapsed="));
+        assert!(exit.ends_with("ms"), "exit line must end with ms: {exit}");
+    }
+
+    #[tokio::test]
+    async fn trace_command_emits_bookend_err() {
+        // INSTR-10 / D-15: on Err, the wrapper still emits the entry + an
+        // err-exit line (structural guarantee — the body future completing with
+        // Err is the only way out, and the wrapper owns both bookends). The err
+        // line renders redact(&e.to_string()) (Display, never {:?}); here we
+        // assert the factored err-line shape plus that the wrapper propagates
+        // the Err unchanged.
+        use crate::error::AppError;
+        let err = AppError::Process("boom".into());
+        let arg = String::new();
+        let v: Result<i32, AppError> =
+            trace_command("dummy_err", arg.clone(), async move { Err(err) }).await;
+        assert!(v.is_err(), "wrapper must propagate the Err unchanged");
+        // The err-exit line shape via the factored seam (the wrapper routes the
+        // AppError Display through redact() before calling cmd_exit_err_line).
+        let safe = crate::utils::redact::redact("Process error: boom");
+        let line = cmd_exit_err_line("dummy_err", 5, &safe);
+        assert!(
+            line.starts_with("[cmd] dummy_err err elapsed="),
+            "err line must have the exit-err prefix: {line}"
+        );
+        assert!(
+            line.contains("error=Process error: boom"),
+            "err line must carry the redacted AppError Display: {line}"
+        );
+    }
+
+    #[test]
+    fn trace_command_sync_is_sync_running() {
+        // INSTR-10 / D-15: trace_command_sync_ok (sync, non-Result) wraps
+        // is_sync_running's body and emits entry + ok-exit. Asserts the return
+        // value propagates and the factored line shapes match.
+        let args = String::new();
+        let v: bool = trace_command_sync_ok("is_sync_running", args.clone(), || true);
+        assert!(v, "wrapper must propagate the bool return");
+        assert_eq!(
+            cmd_entry_line("is_sync_running", &args),
+            "[cmd] is_sync_running starting args="
+        );
+        let exit = cmd_exit_ok_line("is_sync_running", 0);
+        assert!(
+            exit.starts_with("[cmd] is_sync_running ok elapsed="),
+            "ok-exit prefix: {exit}"
+        );
+        assert!(exit.ends_with("ms"));
+    }
+
+    #[test]
+    fn spawned_line_masks_client_and_root() {
+        // INSTR-09 / D-08 safeguard (T-11-PII): the fixture client name
+        // `alice-laptop-fygame` and the bare username `alice` MUST NOT appear
+        // in the rendered process.spawned line. <P4CLIENT> (pre-masked literal)
+        // and <PATH> (root routed through redact) MUST appear.
+        use crate::utils::redact::{test_workspace_fixture, FIXTURE_P4_CLIENT};
+        let ws = test_workspace_fixture();
+        let line = render_spawned_line(1234, &ws.root_path, "sync //FYGame/...@310771");
+        assert!(
+            !line.contains(FIXTURE_P4_CLIENT),
+            "D-08 fail: bare client leaked into spawned line: {line}"
+        );
+        assert!(
+            !line.contains("alice"),
+            "D-08 fail: username leaked into spawned line: {line}"
+        );
+        assert!(
+            line.contains("<P4CLIENT>"),
+            "spawned line must carry the <P4CLIENT> token: {line}"
+        );
+        assert!(
+            line.contains("<PATH>"),
+            "spawned line must mask root_path to <PATH>: {line}"
+        );
+        assert!(
+            line.contains("process.spawned pid=1234"),
+            "spawned line must carry pid=1234: {line}"
+        );
+    }
+
+    #[test]
+    fn spawned_without_exit_is_detectable() {
+        // INSTR-09: a spawned line with no matching exited/cancelled for the
+        // same pid is detectable as a hang (greppable absence). The detection
+        // heuristic is `log contains "process.exited pid=N" OR
+        // "process.cancelled pid=N"`.
+        fn has_terminal(spawned_log: &str, pid: u32) -> bool {
+            spawned_log.contains(&format!("process.exited pid={pid}"))
+                || spawned_log.contains(&format!("process.cancelled pid={pid}"))
+        }
+        // A spawned-only log fragment for pid=99 has no terminal — the hang signal.
+        let hang_log = "process.spawned pid=99 cmd=\"p4 ...\"\n[sync] step=p4Sync starting";
+        assert!(
+            !has_terminal(hang_log, 99),
+            "a spawned line with no matching terminal must be detectable as a hang"
+        );
+        // A log with an exited line for pid=99 is NOT a hang.
+        let ok_log = format!("{hang_log}\nprocess.exited pid=99 code=0 elapsed=10ms");
+        assert!(has_terminal(&ok_log, 99));
+        // A log with a cancelled line for pid=99 is NOT a hang.
+        let cancel_log = format!("{hang_log}\nprocess.cancelled pid=99 signal=<kill> elapsed=10ms");
+        assert!(has_terminal(&cancel_log, 99));
+    }
+
+    #[test]
+    fn exited_and_cancelled_line_shapes() {
+        // INSTR-09 / D-09: pins the three lifecycle line shapes + the
+        // Option<i32> -> "none" shim for the missing-code case.
+        assert_eq!(
+            render_exited_line(99, Some(0), 4521),
+            "process.exited pid=99 code=0 elapsed=4521ms"
+        );
+        assert_eq!(
+            render_exited_line(99, None, 4521),
+            "process.exited pid=99 code=none elapsed=4521ms"
+        );
+        assert_eq!(
+            render_cancelled_line(99, 4521),
+            "process.cancelled pid=99 signal=<kill> elapsed=4521ms"
+        );
     }
 
     // ---- Phase 10: file_formatter redaction wiring (SC#4) ----
