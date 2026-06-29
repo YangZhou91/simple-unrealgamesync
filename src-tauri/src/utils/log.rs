@@ -73,6 +73,30 @@ where
     }
 }
 
+/// Phase 12 / D-02: propagation primitive for spawn'd drain/heartbeat tasks.
+///
+/// `scope_run` (above) generates-or-reuses a RUN_ID at a command boundary;
+/// `scope_run_with` is the THIRD sibling — it takes a PRE-CAPTURED
+/// `Option<String>` RUN_ID and re-scopes it INSIDE a spawned task.
+/// `task_local!` does NOT cross `tokio::spawn` boundaries (the reason Phase 11
+/// left drain + heartbeat lines as `[run=——]`), so the drain tasks in
+/// `p4_executor.rs` / `git_service.rs` capture `RUN_ID.try_with(|r| r.clone()).ok()`
+/// ONCE in the spawning scope (where the task_local is still set) and pass the
+/// `Option<String>` here inside the spawned body. The `Some(id)` branch scopes
+/// the captured ID so every line the future logs fills `[run=<id>]`; the `None`
+/// branch runs the future bare so lines fall back to `[run=——]` (the safe
+/// default for a drain spawned outside any command scope — should not happen in
+/// practice but is the defensive default). The scope reverts on future
+/// completion (D-03), matching `scope_run`. Closes the Phase 11 §"Deferred"
+/// item: "Propagating RUN_ID across tokio::spawn into the stdout/stderr drain +
+/// heartbeat tasks."
+pub async fn scope_run_with<R>(run_id: Option<String>, fut: impl std::future::Future<Output = R>) -> R {
+    match run_id {
+        Some(id) => RUN_ID.scope(id, fut).await,
+        None => fut.await,
+    }
+}
+
 /// Phase 11 INSTR-08 / D-01: sync twin of `scope_run` for the non-async
 /// commands (`is_sync_running`, `validate_exclusions`). Mirrors the
 /// generate-or-reuse-revert contract via `RUN_ID.sync_scope(value, closure)`,
@@ -663,6 +687,51 @@ mod tests {
             .ok()
             .unwrap_or_else(|| RUN_PLACEHOLDER.to_string());
         assert_eq!(outside, "——", "outside any scope the slot is RUN_PLACEHOLDER");
+    }
+
+    // ---- Phase 12: D-02 drain RUN_ID propagation (scope_run_with) ----
+
+    #[tokio::test]
+    async fn scope_run_with_scopes_captured_id() {
+        // D-02: a pre-captured Some(id) fills the RUN_ID slot inside the
+        // future — proving the captured ID re-establishes the scope inside a
+        // spawn'd task (where task_local would otherwise be unset).
+        let inner: String = scope_run_with(Some("deadbeef".into()), async move {
+            RUN_ID.try_with(|r| r.clone()).unwrap()
+        })
+        .await;
+        assert_eq!(
+            inner, "deadbeef",
+            "scope_run_with(Some) must fill the RUN_ID slot with the captured id"
+        );
+    }
+
+    #[tokio::test]
+    async fn scope_run_with_none_runs_bare() {
+        // D-02 defensive None branch: outside any scope, scope_run_with(None)
+        // must NOT fabricate an ID — the future runs bare and RUN_ID.try_with
+        // returns Err (None when `.ok()`-flattened).
+        let inner: Option<String> = scope_run_with(None, async move {
+            RUN_ID.try_with(|r| r.clone()).ok()
+        })
+        .await;
+        assert!(
+            inner.is_none(),
+            "scope_run_with(None) must not fabricate a RUN_ID (got {inner:?})"
+        );
+    }
+
+    #[tokio::test]
+    async fn scope_run_with_reverts_on_return() {
+        // D-03: after scope_run_with returns, the outer task_local reverts —
+        // mirror of scope_run_reverts_on_return. The scope established INSIDE
+        // the future does not leak to the caller (which never set a RUN_ID).
+        let out: i32 = scope_run_with(Some("x".into()), async move { 1 }).await;
+        assert_eq!(out, 1);
+        assert!(
+            RUN_ID.try_with(|r| r.clone()).is_err(),
+            "RUN_ID must be absent after scope_run_with returns (D-03 revert)"
+        );
     }
 
     // ---- Phase 11: INSTR-09/10 command + process-lifecycle helpers ----
