@@ -1,6 +1,7 @@
 use crate::models::WorkspaceConfig;
 use crate::services::p4_executor::{check_exclusion_paths_exist, validate_exclusion_path};
 use crate::services::workspace::WorkspaceService;
+use crate::utils::log::{trace_command, trace_command_sync};
 use std::path::Path;
 use tauri::AppHandle;
 use tauri_plugin_log::log::warn;
@@ -43,51 +44,70 @@ pub async fn add_workspace(
     p4_client: String,
     p4_user: String,
 ) -> Result<WorkspaceConfig, String> {
-    let project_dir = if project_dir.trim().is_empty() {
-        crate::models::workspace::default_project_dir()
-    } else {
-        project_dir.trim().to_string()
-    };
-    validate_workspace_root(&root_path, &project_dir)?;
+    // root_path/p4_client/p4_user are caught by the Phase-10 redact net (D-08).
+    let args_redacted = crate::utils::redact::redact(&format!(
+        "name={name} root_path={root_path} project_dir={project_dir} p4_client={p4_client} p4_user={p4_user}"
+    ))
+    .into_owned();
+    trace_command("add_workspace", args_redacted, async move {
+        let project_dir = if project_dir.trim().is_empty() {
+            crate::models::workspace::default_project_dir()
+        } else {
+            project_dir.trim().to_string()
+        };
+        validate_workspace_root(&root_path, &project_dir)?;
 
-    let workspace = WorkspaceConfig {
-        id: String::new(),
-        name,
-        root_path,
-        project_dir,
-        p4_client,
-        p4_user,
-        last_sync_cl: None,
-        last_sync_time: None,
-        last_sync_file_count: None,
-        parallel_threads: crate::models::workspace::default_parallel_threads(),
-        exclusions: crate::models::workspace::default_exclusions(),
-        interval_minutes: crate::models::workspace::default_interval_minutes(),
-    };
-    WorkspaceService::add(&app, workspace)
-        .await
-        .map_err(|e| e.to_string())
+        let workspace = WorkspaceConfig {
+            id: String::new(),
+            name,
+            root_path,
+            project_dir,
+            p4_client,
+            p4_user,
+            last_sync_cl: None,
+            last_sync_time: None,
+            last_sync_file_count: None,
+            parallel_threads: crate::models::workspace::default_parallel_threads(),
+            exclusions: crate::models::workspace::default_exclusions(),
+            interval_minutes: crate::models::workspace::default_interval_minutes(),
+        };
+        WorkspaceService::add(&app, workspace)
+            .await
+            .map_err(|e| e.to_string())
+    })
+    .await
 }
 
 #[tauri::command]
 pub async fn get_workspaces(app: AppHandle) -> Result<Vec<WorkspaceConfig>, String> {
-    WorkspaceService::list(&app)
-        .await
-        .map_err(|e| e.to_string())
+    trace_command("get_workspaces", String::new(), async move {
+        WorkspaceService::list(&app)
+            .await
+            .map_err(|e| e.to_string())
+    })
+    .await
 }
 
 #[tauri::command]
 pub async fn delete_workspace(app: AppHandle, id: String) -> Result<(), String> {
-    WorkspaceService::delete(&app, &id)
-        .await
-        .map_err(|e| e.to_string())
+    let args_redacted = crate::utils::redact::redact(&format!("id={id}")).into_owned();
+    trace_command("delete_workspace", args_redacted, async move {
+        WorkspaceService::delete(&app, &id)
+            .await
+            .map_err(|e| e.to_string())
+    })
+    .await
 }
 
 #[tauri::command]
 pub async fn switch_workspace(app: AppHandle, id: String) -> Result<WorkspaceConfig, String> {
-    WorkspaceService::get(&app, &id)
-        .await
-        .map_err(|e| e.to_string())
+    let args_redacted = crate::utils::redact::redact(&format!("id={id}")).into_owned();
+    trace_command("switch_workspace", args_redacted, async move {
+        WorkspaceService::get(&app, &id)
+            .await
+            .map_err(|e| e.to_string())
+    })
+    .await
 }
 
 #[tauri::command]
@@ -98,37 +118,46 @@ pub async fn update_workspace_settings(
     exclusions: Vec<String>,
     interval_minutes: u32,
 ) -> Result<WorkspaceConfig, String> {
-    // Clamp parallel_threads to valid range [1, 16]
-    let parallel_threads = parallel_threads.clamp(1, 16);
-    // Clamp interval_minutes to valid range [5, 1440]
-    let interval_minutes = interval_minutes.clamp(5, 1440);
+    // SC#3 gate: Vec<String> renders via .join(",") — NEVER {:?}.
+    let args_redacted = crate::utils::redact::redact(&format!(
+        "workspace_id={workspace_id} parallel_threads={parallel_threads} exclusions={} interval_minutes={interval_minutes}",
+        exclusions.join(",")
+    ))
+    .into_owned();
+    trace_command("update_workspace_settings", args_redacted, async move {
+        // Clamp parallel_threads to valid range [1, 16]
+        let parallel_threads = parallel_threads.clamp(1, 16);
+        // Clamp interval_minutes to valid range [5, 1440]
+        let interval_minutes = interval_minutes.clamp(5, 1440);
 
-    // Validate each exclusion path against traversal attacks
-    for exclusion in &exclusions {
-        validate_exclusion_path(exclusion).map_err(|e| e.to_string())?;
-    }
+        // Validate each exclusion path against traversal attacks
+        for exclusion in &exclusions {
+            validate_exclusion_path(exclusion).map_err(|e| e.to_string())?;
+        }
 
-    // Warn about non-existent paths (returned but not blocking)
-    let ws = WorkspaceService::get(&app, &workspace_id)
+        // Warn about non-existent paths (returned but not blocking)
+        let ws = WorkspaceService::get(&app, &workspace_id)
+            .await
+            .map_err(|e| e.to_string())?;
+        let nonexistent = check_exclusion_paths_exist(&ws.root_path, &ws.project_dir, &exclusions);
+
+        let updated = WorkspaceService::update(&app, &workspace_id, |ws| {
+            ws.parallel_threads = parallel_threads;
+            ws.exclusions = exclusions;
+            ws.interval_minutes = interval_minutes;
+        })
         .await
         .map_err(|e| e.to_string())?;
-    let nonexistent = check_exclusion_paths_exist(&ws.root_path, &ws.project_dir, &exclusions);
 
-    let updated = WorkspaceService::update(&app, &workspace_id, |ws| {
-        ws.parallel_threads = parallel_threads;
-        ws.exclusions = exclusions;
-        ws.interval_minutes = interval_minutes;
+        // Attach nonexistent warnings to the response via the error channel
+        // Frontend will check for warnings in the response
+        if !nonexistent.is_empty() {
+            warn!("[settings] paths not found: {}", nonexistent.join(", "));
+        }
+
+        Ok(updated)
     })
     .await
-    .map_err(|e| e.to_string())?;
-
-    // Attach nonexistent warnings to the response via the error channel
-    // Frontend will check for warnings in the response
-    if !nonexistent.is_empty() {
-        warn!("[settings] paths not found: {}", nonexistent.join(", "));
-    }
-
-    Ok(updated)
 }
 
 #[tauri::command]
@@ -137,21 +166,31 @@ pub fn validate_exclusions(
     project_dir: String,
     exclusions: Vec<String>,
 ) -> Result<Vec<String>, String> {
-    // Security validation
-    for exclusion in &exclusions {
-        validate_exclusion_path(exclusion).map_err(|e| e.to_string())?;
-    }
-    let project_dir = if project_dir.trim().is_empty() {
-        crate::models::workspace::default_project_dir()
-    } else {
-        project_dir.trim().to_string()
-    };
-    // Existence check — returns list of nonexistent paths
-    Ok(check_exclusion_paths_exist(
-        &root_path,
-        &project_dir,
-        &exclusions,
+    // SC#3 gate: Vec<String> renders via .join(",") — NEVER {:?}.
+    let args_redacted = crate::utils::redact::redact(&format!(
+        "root_path={root_path} project_dir={project_dir} exclusions={}",
+        exclusions.join(",")
     ))
+    .into_owned();
+    // SYNC command (pub fn, not async) returning Result — uses trace_command_sync
+    // (the sync Result-aware variant).
+    trace_command_sync("validate_exclusions", args_redacted, || {
+        // Security validation
+        for exclusion in &exclusions {
+            validate_exclusion_path(exclusion).map_err(|e| e.to_string())?;
+        }
+        let project_dir = if project_dir.trim().is_empty() {
+            crate::models::workspace::default_project_dir()
+        } else {
+            project_dir.trim().to_string()
+        };
+        // Existence check — returns list of nonexistent paths
+        Ok(check_exclusion_paths_exist(
+            &root_path,
+            &project_dir,
+            &exclusions,
+        ))
+    })
 }
 
 #[cfg(test)]
