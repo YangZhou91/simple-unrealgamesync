@@ -1,6 +1,7 @@
 use crate::models::SyncEvent;
 use crate::services::git_service::{GitService, GitStatusInfo};
 use crate::services::workspace::WorkspaceService;
+use crate::utils::counting_channel::CountingChannel;
 use crate::utils::log::trace_command;
 use std::sync::Arc;
 use tauri::ipc::Channel;
@@ -21,8 +22,12 @@ pub async fn git_pull(
         let workspace = WorkspaceService::get(&app, &workspace_id)
             .await
             .map_err(|e| e.to_string())?;
+        // D-04 (Phase 12 / HOTUI-12): wrap once at the command boundary so
+        // every send in GitService::pull + its drains increments ONE shared
+        // Arc<AtomicU64> total.
+        let channel = CountingChannel::new(on_event);
         state
-            .pull(&workspace, &on_event)
+            .pull(&workspace, &channel)
             .await
             .map_err(|e| e.to_string())
     })

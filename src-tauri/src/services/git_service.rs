@@ -1,11 +1,11 @@
 use crate::error::AppError;
 use crate::models::{SyncEvent, WorkspaceConfig};
 use crate::services::process_manager::ProcessManager;
+use crate::utils::counting_channel::CountingChannel;
 use serde::Serialize;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use tauri::ipc::Channel;
 use tauri_plugin_log::log::{error, info, warn};
 use crate::utils::log::{render_cancelled_line, render_exited_line};
 use tokio::io::{AsyncBufReadExt, BufReader};
@@ -62,7 +62,7 @@ impl GitService {
     pub async fn pull(
         &self,
         workspace: &WorkspaceConfig,
-        channel: &Channel<SyncEvent>,
+        channel: &CountingChannel,
     ) -> Result<(), AppError> {
         if self.git_running.swap(true, Ordering::SeqCst) {
             return Err(AppError::Process("A git pull is already running".into()));
@@ -75,7 +75,7 @@ impl GitService {
     async fn pull_inner(
         &self,
         workspace: &WorkspaceConfig,
-        channel: &Channel<SyncEvent>,
+        channel: &CountingChannel,
     ) -> Result<(), AppError> {
         // Validate path: UnrealEngine directory must exist with .git
         let ue_path = Path::new(&workspace.root_path).join("UnrealEngine");
@@ -186,6 +186,16 @@ impl GitService {
                     stream: "stdout".to_string(),
                 });
             }
+            // D-05 (Phase 12 / HOTUI-12): per-completion counter summary for the
+            // git-pull stdout drain — ONE line per drain per run, O(1). git pull
+            // has no heartbeat task, so the counter fires at drain completion.
+            // log_enabled! guard mandatory (HOTUI-13 eager-eval rule).
+            if log::log_enabled!(log::Level::Debug) {
+                crate::utils::log::debug!(
+                    "ipc.channel drain complete stream=stdout sent_total={}",
+                    ch_out.count()
+                );
+            }
         });
 
         // Stream stderr
@@ -198,6 +208,14 @@ impl GitService {
                     line,
                     stream: "stderr".to_string(),
                 });
+            }
+            // D-05 (Phase 12 / HOTUI-12): git-pull stderr per-completion
+            // counter summary — ONE line per drain per run.
+            if log::log_enabled!(log::Level::Debug) {
+                crate::utils::log::debug!(
+                    "ipc.channel drain complete stream=stderr sent_total={}",
+                    ch_err.count()
+                );
             }
         });
 
@@ -383,7 +401,7 @@ impl GitService {
     async fn run_gen_project(
         &self,
         workspace: &WorkspaceConfig,
-        channel: &Channel<SyncEvent>,
+        channel: &CountingChannel,
     ) -> Result<(), AppError> {
         let _ = channel.send(SyncEvent::StepStarted {
             step: "genProject".to_string(),
@@ -461,6 +479,14 @@ impl GitService {
                     stream: "stdout".to_string(),
                 });
             }
+            // D-05 (Phase 12 / HOTUI-12): genProject stdout per-completion
+            // counter summary — ONE line per drain per run.
+            if log::log_enabled!(log::Level::Debug) {
+                crate::utils::log::debug!(
+                    "ipc.channel drain complete stream=stdout sent_total={}",
+                    ch_out.count()
+                );
+            }
         });
 
         let ch_err = channel.clone();
@@ -471,6 +497,14 @@ impl GitService {
                     line,
                     stream: "stderr".to_string(),
                 });
+            }
+            // D-05 (Phase 12 / HOTUI-12): genProject stderr per-completion
+            // counter summary — ONE line per drain per run.
+            if log::log_enabled!(log::Level::Debug) {
+                crate::utils::log::debug!(
+                    "ipc.channel drain complete stream=stderr sent_total={}",
+                    ch_err.count()
+                );
             }
         });
 
@@ -546,7 +580,7 @@ fn parse_ahead_behind(text: &str) -> (u32, u32) {
 }
 
 /// Restore stashed changes via `git stash pop`, logging result to channel
-async fn restore_stash(ue_path: &Path, channel: &Channel<SyncEvent>) -> Result<(), AppError> {
+async fn restore_stash(ue_path: &Path, channel: &CountingChannel) -> Result<(), AppError> {
     let _ = channel.send(SyncEvent::LogLine {
         line: "Restoring stashed changes...".to_string(),
         stream: "stdout".to_string(),

@@ -4,6 +4,7 @@ use crate::services::p4_executor::{P4Executor, SyncOptions};
 use crate::services::process_manager::ProcessManager;
 use crate::services::sync_orchestrator::SyncOrchestrator;
 use crate::services::workspace::WorkspaceService;
+use crate::utils::counting_channel::CountingChannel;
 use crate::utils::log::{trace_command, trace_command_sync_ok};
 use serde::Serialize;
 use std::sync::Arc;
@@ -37,8 +38,17 @@ pub async fn start_sync(
         if let Some(ref cl) = target_cl {
             p4_executor::validate_target_cl(cl).map_err(|e| e.to_string())?;
         }
+        // D-04 (Phase 12 / HOTUI-12): wrap the incoming Channel ONCE at the
+        // command boundary so every downstream `.send()` (across the
+        // orchestrator + P4Executor + GitService + all spawn'd drains + the
+        // heartbeat) increments ONE Arc<AtomicU64> total. The wrap lives INSIDE
+        // trace_command so the counter's lifetime is the whole run and the
+        // sampled `ipc.channel sent total=N` line inherits the command's RUN_ID
+        // (D-02: do NOT re-scope RUN_ID here; the formatter fills [run=<id>]
+        // from the task_local the wrapper already scoped).
+        let channel = CountingChannel::new(on_event);
         state
-            .run_pipeline(workspace_id, target_cl, on_event, app)
+            .run_pipeline(workspace_id, target_cl, channel, app)
             .await
             .map_err(|e| e.to_string())
     })
@@ -148,8 +158,10 @@ pub async fn retry_step(
         if let Some(ref cl) = target_cl {
             p4_executor::validate_target_cl(cl).map_err(|e| e.to_string())?;
         }
+        // D-04 (Phase 12 / HOTUI-12): wrap once at the command boundary.
+        let channel = CountingChannel::new(on_event);
         state
-            .retry_step(workspace_id, step, target_cl, on_event, app)
+            .retry_step(workspace_id, step, target_cl, channel, app)
             .await
             .map_err(|e| e.to_string())
     })
@@ -170,8 +182,10 @@ pub async fn start_rollback(
             .into_owned();
     // D-02 reuse-parent site: start_rollback → rollback_pipeline → _inner.
     trace_command("start_rollback", args_redacted, async move {
+        // D-04 (Phase 12 / HOTUI-12): wrap once at the command boundary.
+        let channel = CountingChannel::new(on_event);
         state
-            .rollback_pipeline(workspace_id, target_cl, on_event, app)
+            .rollback_pipeline(workspace_id, target_cl, channel, app)
             .await
             .map_err(|e| e.to_string())
     })

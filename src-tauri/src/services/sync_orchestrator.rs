@@ -4,11 +4,11 @@ use crate::services::history::HistoryService;
 use crate::services::p4_executor::{validate_target_cl, P4Executor, SyncOptions};
 use crate::services::process_manager::ProcessManager;
 use crate::services::workspace::WorkspaceService;
+use crate::utils::counting_channel::CountingChannel;
 use crate::utils::log::StepScope;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
-use tauri::ipc::Channel;
 use tauri::{AppHandle, Emitter};
 use tauri_plugin_log::log::{error, info, warn};
 use tokio_util::sync::CancellationToken;
@@ -49,7 +49,7 @@ impl SyncOrchestrator {
         &self,
         workspace_id: String,
         target_cl: Option<String>,
-        channel: Channel<SyncEvent>,
+        channel: CountingChannel,
         app: AppHandle,
     ) -> Result<(), AppError> {
         if self.pipeline_running.swap(true, Ordering::SeqCst) {
@@ -69,7 +69,7 @@ impl SyncOrchestrator {
         &self,
         workspace_id: String,
         target_cl: Option<String>,
-        channel: Channel<SyncEvent>,
+        channel: CountingChannel,
         app: AppHandle,
     ) -> Result<(), AppError> {
         let workspace = WorkspaceService::get(&app, &workspace_id).await?;
@@ -296,7 +296,7 @@ impl SyncOrchestrator {
         &self,
         workspace_id: String,
         target_cl: String,
-        channel: Channel<SyncEvent>,
+        channel: CountingChannel,
         app: AppHandle,
     ) -> Result<(), AppError> {
         if self.pipeline_running.swap(true, Ordering::SeqCst) {
@@ -316,7 +316,7 @@ impl SyncOrchestrator {
         &self,
         workspace_id: String,
         target_cl: String,
-        channel: Channel<SyncEvent>,
+        channel: CountingChannel,
         app: AppHandle,
     ) -> Result<(), AppError> {
         // Validate target_cl
@@ -501,7 +501,7 @@ impl SyncOrchestrator {
         workspace_id: String,
         step: String,
         target_cl: Option<String>,
-        channel: Channel<SyncEvent>,
+        channel: CountingChannel,
         app: AppHandle,
     ) -> Result<(), AppError> {
         if self.pipeline_running.swap(true, Ordering::SeqCst) {
@@ -522,7 +522,7 @@ impl SyncOrchestrator {
         workspace_id: String,
         step: String,
         target_cl: Option<String>,
-        channel: Channel<SyncEvent>,
+        channel: CountingChannel,
         app: AppHandle,
     ) -> Result<(), AppError> {
         let workspace = WorkspaceService::get(&app, &workspace_id).await?;
@@ -603,7 +603,7 @@ impl SyncOrchestrator {
         Ok(())
     }
 
-    async fn close_ue(&self, channel: &Channel<SyncEvent>) -> Result<(), AppError> {
+    async fn close_ue(&self, channel: &CountingChannel) -> Result<(), AppError> {
         let _ = channel.send(SyncEvent::StepStarted {
             step: "closeUe".to_string(),
             description: "Checking for UE Editor...".to_string(),
@@ -659,7 +659,7 @@ impl SyncOrchestrator {
     async fn clean_dev_dir(
         &self,
         workspace: &WorkspaceConfig,
-        channel: &Channel<SyncEvent>,
+        channel: &CountingChannel,
     ) -> Result<(), AppError> {
         let _ = channel.send(SyncEvent::StepStarted {
             step: "cleanDevDir".to_string(),
@@ -727,7 +727,7 @@ impl SyncOrchestrator {
     async fn p4_sync(
         &self,
         workspace: &WorkspaceConfig,
-        channel: &Channel<SyncEvent>,
+        channel: &CountingChannel,
         cancel: CancellationToken,
         options: &SyncOptions,
     ) -> Result<u64, AppError> {
@@ -827,7 +827,7 @@ impl SyncOrchestrator {
     async fn force_sync_engine_step(
         &self,
         workspace: &WorkspaceConfig,
-        channel: &Channel<SyncEvent>,
+        channel: &CountingChannel,
         cancel: CancellationToken,
     ) -> Result<(), AppError> {
         let _ = channel.send(SyncEvent::StepStarted {
@@ -870,7 +870,7 @@ impl SyncOrchestrator {
     async fn gen_project(
         &self,
         workspace: &WorkspaceConfig,
-        channel: &Channel<SyncEvent>,
+        channel: &CountingChannel,
     ) -> Result<(), AppError> {
         let _ = channel.send(SyncEvent::StepStarted {
             step: "genProject".to_string(),
@@ -938,6 +938,15 @@ impl SyncOrchestrator {
                     stream: "stdout".to_string(),
                 });
             }
+            // D-05 (Phase 12 / HOTUI-12): per-completion counter summary for the
+            // genProject stdout drain — ONE line per drain per run, O(1).
+            // log_enabled! guard mandatory (HOTUI-13 eager-eval rule).
+            if log::log_enabled!(log::Level::Debug) {
+                crate::utils::log::debug!(
+                    "ipc.channel drain complete stream=stdout sent_total={}",
+                    ch_out.count()
+                );
+            }
         });
 
         let ch_err = channel.clone();
@@ -963,6 +972,14 @@ impl SyncOrchestrator {
                     lines: log_buf,
                     stream: "stderr".to_string(),
                 });
+            }
+            // D-05 (Phase 12 / HOTUI-12): genProject stderr per-completion
+            // counter summary — ONE line per drain per run.
+            if log::log_enabled!(log::Level::Debug) {
+                crate::utils::log::debug!(
+                    "ipc.channel drain complete stream=stderr sent_total={}",
+                    ch_err.count()
+                );
             }
         });
 

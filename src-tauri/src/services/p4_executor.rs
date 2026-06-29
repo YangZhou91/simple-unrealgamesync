@@ -1,11 +1,11 @@
 use crate::error::AppError;
 use crate::models::{ChangelistEntry, SyncEvent, WorkspaceConfig};
 use crate::services::process_manager::ProcessManager;
+use crate::utils::counting_channel::CountingChannel;
 use std::path::Path;
 use std::process::Stdio;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-use tauri::ipc::Channel;
 use tauri_plugin_log::log::{info, warn};
 use crate::utils::log::{render_cancelled_line, render_exited_line, render_spawned_line, StepScope};
 use tokio::io::{AsyncBufReadExt, BufReader};
@@ -445,7 +445,7 @@ impl P4Executor {
     pub async fn sync(
         &self,
         workspace: &WorkspaceConfig,
-        channel: &Channel<SyncEvent>,
+        channel: &CountingChannel,
         cancel: CancellationToken,
         options: &SyncOptions,
         total: Arc<AtomicU64>,
@@ -567,6 +567,17 @@ impl P4Executor {
                     stream: "stdout".to_string(),
                 });
             }
+            // D-05 (Phase 12 / HOTUI-12): per-completion counter summary for the
+            // stdout drain family (the p4-sync stdout drain has no heartbeat
+            // host of its own — the heartbeat above is a separate task). ONE
+            // line per drain per run, O(1) — NOT per-event. log_enabled! guard
+            // mandatory (HOTUI-13 eager-eval rule).
+            if log::log_enabled!(log::Level::Debug) {
+                crate::utils::log::debug!(
+                    "ipc.channel drain complete stream=stdout sent_total={}",
+                    ch.count()
+                );
+            }
         });
 
         let ch_err = channel.clone();
@@ -593,6 +604,14 @@ impl P4Executor {
                     stream: "stderr".to_string(),
                 });
             }
+            // D-05 (Phase 12 / HOTUI-12): per-completion counter summary for the
+            // stderr drain family — ONE line per drain per run.
+            if log::log_enabled!(log::Level::Debug) {
+                crate::utils::log::debug!(
+                    "ipc.channel drain complete stream=stderr sent_total={}",
+                    ch_err.count()
+                );
+            }
         });
 
         // Heartbeat task: sends progress events every 5 seconds when no file progress
@@ -612,6 +631,19 @@ impl P4Executor {
                     total,
                     current_file: String::new(),
                 });
+                // D-05 (Phase 12 / HOTUI-12): sample the IPC-channel send counter
+                // on every 5s tick — ONE line per tick (O(seconds-per-sync), NOT
+                // per-event). `ch_heartbeat` is a CountingChannel clone, so its
+                // `.count()` reads the Arc-shared total incremented by every
+                // stdout/stderr/heartbeat/orchestrator `.send()`. The
+                // `log_enabled!(Debug)` guard is MANDATORY (HOTUI-13 eager-eval
+                // rule: the `format!` cost is skipped when Debug is compiled out).
+                if log::log_enabled!(log::Level::Debug) {
+                    crate::utils::log::debug!(
+                        "ipc.channel sent total={}",
+                        ch_heartbeat.count()
+                    );
+                }
             }
         });
 
@@ -661,7 +693,7 @@ impl P4Executor {
     pub async fn force_sync_engine(
         &self,
         workspace: &WorkspaceConfig,
-        channel: &Channel<SyncEvent>,
+        channel: &CountingChannel,
         cancel: CancellationToken,
         process_manager: Option<Arc<ProcessManager>>,
     ) -> Result<(), AppError> {
@@ -721,6 +753,15 @@ impl P4Executor {
                     stream: "stdout".to_string(),
                 });
             }
+            // D-05 (Phase 12 / HOTUI-12): force-sync has NO heartbeat task, so
+            // the counter line fires as a per-completion summary instead — ONE
+            // line per drain per run, O(1). log_enabled! guard mandatory.
+            if log::log_enabled!(log::Level::Debug) {
+                crate::utils::log::debug!(
+                    "ipc.channel drain complete stream=stdout sent_total={}",
+                    ch_out.count()
+                );
+            }
         });
 
         // Stream stderr as LogBatch events (batched to reduce IPC call count)
@@ -747,6 +788,14 @@ impl P4Executor {
                     lines: log_buf,
                     stream: "stderr".to_string(),
                 });
+            }
+            // D-05 (Phase 12 / HOTUI-12): force-sync stderr per-completion
+            // counter summary — ONE line per drain per run.
+            if log::log_enabled!(log::Level::Debug) {
+                crate::utils::log::debug!(
+                    "ipc.channel drain complete stream=stderr sent_total={}",
+                    ch_err.count()
+                );
             }
         });
 
