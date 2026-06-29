@@ -130,3 +130,19 @@ export function gitStatus(workspaceId: string): Promise<GitBranchInfo> {
 export function stopGitPull(): Promise<void> {
   return invoke("stop_git_pull");
 }
+
+// HOTUI-14 (Phase 12 D-06/D-07/D-08): operator-facing log affordances.
+// All three resolve the log path Rust-side; the JS only fires the command and
+// (for exportLog) shows the returned destination path. The save dialog inside
+// exportLog is invoked Rust-side — the JS does NOT call @tauri-apps/plugin-dialog.
+export function openLogsFolder(): Promise<void> {
+  return invoke("open_logs_folder");
+}
+
+export function exportLog(): Promise<string> {
+  return invoke("export_log");
+}
+
+export function getLogPath(): Promise<string> {
+  return invoke("get_log_path");
+}

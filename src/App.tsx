@@ -151,9 +151,7 @@ function App() {
             onDelete={workspaces.deleteWorkspace}
             onAdd={workspaces.addWorkspace}
             onOpenSettings={() => setIsSettingsOpen(true)}
-            isSettingsDisabled={
-              !workspaces.selectedWorkspace || isOperationRunning
-            }
+            isSettingsDisabled={isOperationRunning}
             updaterInfo={updater.info}
             onCheckUpdate={updater.checkAndInstall}
           />
