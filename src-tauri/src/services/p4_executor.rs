@@ -7,6 +7,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use tauri::ipc::Channel;
 use tauri_plugin_log::log::{info, warn};
+use crate::utils::log::{render_cancelled_line, render_exited_line, render_spawned_line, StepScope};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
 use tokio::sync::Mutex;
@@ -486,9 +487,24 @@ impl P4Executor {
         .map_err(AppError::ProcessSpawn)?;
 
         // Track the p4 process PID so stop_all can kill it via taskkill
+        let spawn_start = std::time::Instant::now();
         if let (Some(ref pm), Some(id)) = (&process_manager, child.id()) {
             pm.track_pid(id).await;
         }
+
+        // INSTR-09 / D-09 / D-10: process.spawned at the track_pid site. The
+        // joined args are the sync subcommand args (depot paths / CL / parallel
+        // flag) WITHOUT the p4 globals — render_spawned_line re-adds the masked
+        // `p4 -I -C utf8 -c <P4CLIENT> -d <masked_root>` prefix and routes the
+        // whole line through the D-08 redact safeguard (Plan 11-01 helper).
+        info!(
+            "{}",
+            render_spawned_line(
+                child.id().unwrap_or(0),
+                &workspace.root_path,
+                &args_refs.join(" ")
+            )
+        );
 
         let stdout = child.stdout.take().unwrap();
         let stderr = child.stderr.take().unwrap();
@@ -605,6 +621,14 @@ impl P4Executor {
                 let _ = stderr_task.await;
                 heartbeat_task.abort();
                 let status = status.map_err(AppError::ProcessSpawn)?;
+                // INSTR-09 / D-09: process.exited fires BEFORE the success check
+                // so the terminal lifecycle line always emits, success or fail.
+                let pid_for_log = child.id().unwrap_or(0);
+                let elapsed_for_log = spawn_start.elapsed().as_millis();
+                info!(
+                    "{}",
+                    render_exited_line(pid_for_log, status.code(), elapsed_for_log)
+                );
                 if !status.success() {
                     return Err(AppError::P4Command(status.code()));
                 }
@@ -614,6 +638,14 @@ impl P4Executor {
                 let _ = stdout_task.await;
                 let _ = stderr_task.await;
                 heartbeat_task.abort();
+                // INSTR-09 / D-09: process.cancelled — the distinct cancel signal
+                // (kill sent + Err(Cancelled) returned to the orchestrator).
+                let pid_for_log = child.id().unwrap_or(0);
+                let elapsed_for_log = spawn_start.elapsed().as_millis();
+                info!(
+                    "{}",
+                    render_cancelled_line(pid_for_log, elapsed_for_log)
+                );
                 return Err(AppError::Cancelled);
             }
         }
@@ -643,9 +675,23 @@ impl P4Executor {
             .map_err(AppError::ProcessSpawn)?;
 
         // Track PID for process_manager.stop_all() support
+        let spawn_start = std::time::Instant::now();
         if let (Some(ref pm), Some(id)) = (&process_manager, child.id()) {
             pm.track_pid(id).await;
         }
+
+        // INSTR-09 / D-09 / D-10: process.spawned at the force-sync track_pid
+        // site. args_refs is `build_force_sync_args()` output (`sync -f
+        // UnrealEngine/Engine/{Source,Shaders,Config}/...`); the masked prefix
+        // is re-added by render_spawned_line (Plan 11-01 D-08 safeguard).
+        info!(
+            "{}",
+            render_spawned_line(
+                child.id().unwrap_or(0),
+                &workspace.root_path,
+                &args_refs.join(" ")
+            )
+        );
 
         let stdout = child.stdout.take().unwrap();
         let stderr = child.stderr.take().unwrap();
@@ -711,6 +757,15 @@ impl P4Executor {
                 let _ = stdout_task.await;
                 let _ = stderr_task.await;
                 let status = status.map_err(AppError::ProcessSpawn)?;
+                // INSTR-09 / D-09: process.exited — always fires (before success
+                // check) so the force-sync terminal lifecycle line emits on
+                // both success and failure paths.
+                let pid_for_log = child.id().unwrap_or(0);
+                let elapsed_for_log = spawn_start.elapsed().as_millis();
+                info!(
+                    "{}",
+                    render_exited_line(pid_for_log, status.code(), elapsed_for_log)
+                );
                 if !status.success() {
                     return Err(AppError::P4Command(status.code()));
                 }
@@ -720,6 +775,13 @@ impl P4Executor {
                 let _ = child.kill().await;
                 let _ = stdout_task.await;
                 let _ = stderr_task.await;
+                // INSTR-09 / D-09: process.cancelled on the cancel arm.
+                let pid_for_log = child.id().unwrap_or(0);
+                let elapsed_for_log = spawn_start.elapsed().as_millis();
+                info!(
+                    "{}",
+                    render_cancelled_line(pid_for_log, elapsed_for_log)
+                );
                 Err(AppError::Cancelled)
             }
         }
@@ -732,6 +794,15 @@ impl P4Executor {
         cancel: CancellationToken,
         process_manager: Option<Arc<ProcessManager>>,
     ) -> Result<u64, AppError> {
+        // D-14: the behind-check dry-run is its own `step=dryRun`. StepScope
+        // emits `step=dryRun starting` here and a terminal `done`/`failed`/
+        // `cancelled`/`dropped` line with elapsed on Drop — on EVERY return path
+        // (the structural D-12 guarantee). The done/failed/cancelled markers
+        // below pin the outcome text; even if a return path forgets one, Drop
+        // still emits a greppable `dropped` terminal so a forgotten path stays
+        // distinct from a real hang (which has NO terminal at all).
+        let _dry_scope = StepScope::new("dryRun");
+
         // Don't use -I for dry run (no actual transfer, no progress needed)
         let args = build_p4_sync_args(
             options,
@@ -750,9 +821,23 @@ impl P4Executor {
             .map_err(AppError::ProcessSpawn)?;
 
         // Track the p4 dry-run process PID so stop_all can kill it
+        let spawn_start = std::time::Instant::now();
         if let (Some(ref pm), Some(id)) = (&process_manager, child.id()) {
             pm.track_pid(id).await;
         }
+
+        // INSTR-09 / D-09 / D-10: process.spawned at the dry-run track_pid site.
+        // full_args includes `-n` and the sync subcommand args; render_spawned_line
+        // re-adds the masked `p4 -I -C utf8 -c <P4CLIENT> -d <masked_root>` prefix
+        // (Plan 11-01 D-08 safeguard).
+        info!(
+            "{}",
+            render_spawned_line(
+                child.id().unwrap_or(0),
+                &workspace.root_path,
+                &args_refs.join(" ")
+            )
+        );
 
         let stdout = child.stdout.take().unwrap();
         let stdout_reader = BufReader::new(stdout);
@@ -767,6 +852,7 @@ impl P4Executor {
             count
         });
 
+        let pid_for_log = child.id().unwrap_or(0);
         tokio::select! {
             result = tokio::time::timeout(
                 std::time::Duration::from_secs(120),
@@ -776,16 +862,41 @@ impl P4Executor {
                     Ok(status) => {
                         let status = status.map_err(AppError::ProcessSpawn)?;
                         let count = read_task.await.unwrap_or(0);
+                        // INSTR-09 / D-09: process.exited — emit BEFORE the
+                        // success check so the terminal lifecycle line always
+                        // fires (success or `Ok(0)` fallback).
+                        info!(
+                            "{}",
+                            render_exited_line(
+                                pid_for_log,
+                                status.code(),
+                                spawn_start.elapsed().as_millis()
+                            )
+                        );
                         if !status.success() {
+                            _dry_scope.failed();
                             return Ok(0);
                         }
                         info!("[dry_run] completed, total files: {count}");
+                        _dry_scope.done(&format!("files_behind={count}"));
                         Ok(count)
                     }
                     Err(_) => {
                         let _ = child.kill().await;
                         let _ = read_task.await;
                         warn!("[dry_run] timed out after 120s, proceeding with total=0");
+                        // INSTR-09 / D-09: record the timeout as an exit-with-
+                        // no-code (child killed, code unknown). The dry-run
+                        // step is marked failed so Drop logs `failed` terminal.
+                        info!(
+                            "{}",
+                            render_exited_line(
+                                pid_for_log,
+                                None,
+                                spawn_start.elapsed().as_millis()
+                            )
+                        );
+                        _dry_scope.failed();
                         Ok(0)
                     }
                 }
@@ -794,6 +905,15 @@ impl P4Executor {
                 let _ = child.kill().await;
                 let _ = read_task.await;
                 warn!("[dry_run] cancelled by user");
+                // INSTR-09 / D-09: process.cancelled on the cancel arm.
+                info!(
+                    "{}",
+                    render_cancelled_line(
+                        pid_for_log,
+                        spawn_start.elapsed().as_millis()
+                    )
+                );
+                _dry_scope.cancelled();
                 Err(AppError::Cancelled)
             }
         }
