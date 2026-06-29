@@ -80,6 +80,9 @@ pub fn run() {
             commands::git::git_pull,
             commands::git::git_status,
             commands::git::stop_git_pull,
+            commands::log::open_logs_folder,
+            commands::log::export_log,
+            commands::log::get_log_path,
         ])
         .setup(|app| {
             tray_manager::setup_tray(app)?;
