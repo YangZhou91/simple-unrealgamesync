@@ -17,10 +17,12 @@
 //! Plan 02 consumes the helper by swapping the registration at `lib.rs:26`.
 
 use std::fmt::Arguments;
+use std::time::Instant;
 use log::Record;
 use tauri::{plugin::TauriPlugin, Runtime};
 use tauri_plugin_log::{Builder, RotationStrategy, Target, TargetKind, TimezoneStrategy};
 use chrono::Local;
+use uuid::Uuid;
 
 // Re-export so call sites can use `crate::utils::log::{info, warn, ...}`.
 // Migration of the 43 existing `tauri_plugin_log::log::*` call sites to this
@@ -28,10 +30,64 @@ use chrono::Local;
 // required to exist by end of Phase 9.
 pub use log::{debug, info, warn, error, trace};
 
+/// Phase 11 INSTR-08: per-task correlation ID storage. `scope_run` (and the
+/// sync `scope_run_sync`) set-or-reuse this at every `#[tauri::command]`
+/// boundary; `file_formatter` reads it via `try_with` to fill the `[run=<id>]`
+/// slot. `task_local!` auto-reverts on task completion (D-03), so lines logged
+/// after a command returns correctly fall back to `[run=——]`.
+tokio::task_local! {
+    pub static RUN_ID: String;
+}
+
 /// D-02 reservation glyph printed for every Phase 9 line in the `[run=...]`
 /// slot. Phase 11 swaps this for `RUN_ID.try_with(|r| r.clone()).ok()`; the
 /// line layout is unchanged.
 const RUN_PLACEHOLDER: &str = "——";
+
+/// D-04: 8-char lowercase-hex run-ID generator (`uuid v4` already a Cargo dep).
+/// Returns e.g. `"ab12cd34"` — ~4-billion ID space, negligible collision for a
+/// single-user personal tool (T-11-SPOOF disposition: accept). Private: only
+/// `scope_run`/`scope_run_sync` call it.
+fn fresh_run_id() -> String {
+    Uuid::new_v4().simple().to_string()[..8].to_owned()
+}
+
+/// Phase 11 INSTR-08 / D-01 / D-02 / D-03: scope a RUN_ID around an async body.
+///
+/// If a RUN_ID is already set on this task (e.g. the command boundary already
+/// scoped one and we're entering a nested pipeline entry point), REUSE it (one
+/// ID per user action — D-02). Otherwise generate a fresh one and scope it via
+/// `RUN_ID.scope(value, fut)`, which reverts the task_local automatically when
+/// the future completes (D-03). The body's every `.await` point sees the same
+/// RUN_ID; the formatter fills the `[run=<id>]` slot from it.
+pub async fn scope_run<F, T>(fut: F) -> T
+where
+    F: std::future::Future<Output = T>,
+{
+    match RUN_ID.try_with(|r| r.clone()) {
+        Ok(_existing) => fut.await, // D-02: parent set — reuse, do NOT nest.
+        Err(_) => {
+            let id = fresh_run_id();
+            RUN_ID.scope(id, fut).await // reverts on return (D-03).
+        }
+    }
+}
+
+/// Phase 11 INSTR-08 / D-01: sync twin of `scope_run` for the non-async
+/// commands (`is_sync_running`, `validate_exclusions`). Mirrors the
+/// generate-or-reuse-revert contract via `RUN_ID.sync_scope(value, closure)`,
+/// tokio's sync sibling of `.scope(value, fut)` (the `.scope` overload takes a
+/// Future; only `.sync_scope` takes a closure). Reverts the task_local on
+/// return — D-03.
+pub fn scope_run_sync<T>(f: impl FnOnce() -> T) -> T {
+    if RUN_ID.try_with(|_r| ()).is_ok() {
+        // D-02: parent set — reuse, do NOT nest.
+        f()
+    } else {
+        let id = fresh_run_id();
+        RUN_ID.sync_scope(id, f)
+    }
+}
 
 /// D-01: reduce a full Rust module path to its last `::`-segment.
 ///
@@ -98,7 +154,18 @@ pub fn build_logger_plugin<R: Runtime>() -> TauriPlugin<R> {
         // non-deterministic and cannot be asserted against a fixed expected
         // value. `{ts} {body}` is byte-identical to inlining the four body
         // fields directly into this `format_args!`.
-        let body = format_line_body(module, record.level(), RUN_PLACEHOLDER, message);
+        // D-06 (Phase 11): swap the RUN_PLACEHOLDER literal for a live RUN_ID
+        // lookup. Inside an active scope the slot fills with the task_local's
+        // value (e.g. `[run=ab12cd34]`); outside any scope it falls back to
+        // RUN_PLACEHOLDER ("——") per D-03. Zero line-layout change — only the
+        // source of the `run` argument differs. The 8 Phase 9 `format_line_body_*`
+        // tests stay byte-identical because they call format_line_body directly
+        // with an explicit run arg, never through this closure.
+        let run_id = RUN_ID
+            .try_with(|r| r.clone())
+            .ok()
+            .unwrap_or_else(|| RUN_PLACEHOLDER.to_string());
+        let body = format_line_body(module, record.level(), &run_id, message);
         // ★ Phase 10: redact the assembled body before it hits disk (D-05 net).
         // redact() returns Cow::Borrowed on no-match (zero-alloc fast path); the
         // common case (a line with no sensitive content) pays nothing. This is
@@ -261,6 +328,70 @@ mod tests {
             format_line_body("m", log::Level::Trace, "——", "x"),
             "TRACE m: [run=——] x"
         );
+    }
+
+    // ---- Phase 11: INSTR-08 RUN_ID correlation core ----
+
+    #[tokio::test]
+    async fn fresh_run_id_is_8_hex() {
+        // D-04: 8 lowercase hex chars, unique across calls. Manual char-class
+        // check avoids coupling the test to the `regex` crate's public surface.
+        let id_a = fresh_run_id();
+        assert_eq!(id_a.len(), 8, "RUN_ID must be 8 chars: got {id_a:?}");
+        assert!(
+            id_a.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()),
+            "RUN_ID must be lowercase hex ([0-9a-f]): got {id_a:?}"
+        );
+        // simple() emits lowercase, but enforce explicitly to pin the contract.
+        let id_b = fresh_run_id();
+        assert_ne!(id_a, id_b, "two fresh_run_id calls must differ");
+    }
+
+    #[tokio::test]
+    async fn scope_run_reuses_parent_id() {
+        // D-02: when RUN_ID is already set on the task_local, scope_run REUSES
+        // it (one ID per user action) — it must NOT generate a fresh nested ID.
+        let inner = RUN_ID
+            .scope("parent".to_string(), async move {
+                scope_run(async move { RUN_ID.try_with(|r| r.clone()).unwrap() }).await
+            })
+            .await;
+        assert_eq!(inner, "parent", "scope_run must reuse the parent RUN_ID");
+    }
+
+    #[tokio::test]
+    async fn scope_run_reverts_on_return() {
+        // D-03: after scope_run returns, the task_local reverts — try_with must
+        // report None (Err) on the outer scope that never set a RUN_ID.
+        let out: i32 = scope_run(async { 42 }).await;
+        assert_eq!(out, 42);
+        assert!(
+            RUN_ID.try_with(|r| r.clone()).is_err(),
+            "RUN_ID must be absent after scope_run returns (D-03 revert)"
+        );
+    }
+
+    #[tokio::test]
+    async fn file_formatter_fills_run_slot() {
+        // D-06: the formatter lookup yields the live RUN_ID inside a scope and
+        // RUN_PLACEHOLDER (——) outside any scope. Replicates the exact expression
+        // swapped into file_formatter so the swap is pinned without depending
+        // on the non-deterministic timestamp. Uses the async .scope overload
+        // (task_local provides .scope for futures, .sync_scope for closures).
+        let inside = RUN_ID
+            .scope("ab12cd34".to_string(), async move {
+                RUN_ID
+                    .try_with(|r| r.clone())
+                    .ok()
+                    .unwrap_or_else(|| RUN_PLACEHOLDER.to_string())
+            })
+            .await;
+        assert_eq!(inside, "ab12cd34");
+        let outside = RUN_ID
+            .try_with(|r| r.clone())
+            .ok()
+            .unwrap_or_else(|| RUN_PLACEHOLDER.to_string());
+        assert_eq!(outside, "——", "outside any scope the slot is RUN_PLACEHOLDER");
     }
 
     // ---- Phase 10: file_formatter redaction wiring (SC#4) ----
