@@ -4,6 +4,7 @@ use crate::services::history::HistoryService;
 use crate::services::p4_executor::{validate_target_cl, P4Executor, SyncOptions};
 use crate::services::process_manager::ProcessManager;
 use crate::services::workspace::WorkspaceService;
+use crate::utils::log::StepScope;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
@@ -74,12 +75,11 @@ impl SyncOrchestrator {
         let workspace = WorkspaceService::get(&app, &workspace_id).await?;
 
         // Network pre-check (silent -- not a StepIndicator step, per D-01)
-        info!(
-            "[sync] workspace={}, step=networkCheck starting",
-            workspace.name
-        );
+        info!("[sync] workspace={}", workspace.name);
+        let step = StepScope::new("networkCheck");
         if let Err(e) = self.p4.check_connectivity(&workspace).await {
             error!("[sync] step=networkCheck failed: {e}");
+            step.failed();
             let _ = channel.send(SyncEvent::SyncFailed {
                 step: "networkCheck".to_string(),
                 error: e.to_string(),
@@ -93,7 +93,7 @@ impl SyncOrchestrator {
             );
             return Err(e);
         }
-        info!("[sync] step=networkCheck done");
+        step.done("");
         let _ = app.emit(
             "sync-state",
             SyncStatePayload {
@@ -110,9 +110,11 @@ impl SyncOrchestrator {
         };
 
         // Step 1: Close UE Editor
-        info!("[sync] workspace={}, step=closeUe starting", workspace.name);
+        info!("[sync] workspace={}", workspace.name);
+        let step = StepScope::new("closeUe");
         if let Err(e) = self.close_ue(&channel).await {
             error!("[sync] step=closeUe failed: {e}");
+            step.failed();
             let _ = channel.send(SyncEvent::SyncFailed {
                 step: "closeUe".to_string(),
                 error: e.to_string(),
@@ -126,15 +128,14 @@ impl SyncOrchestrator {
             );
             return Err(e);
         }
-        info!("[sync] step=closeUe done");
+        step.done("");
 
         // Step 2: Clean Dev Directory
-        info!(
-            "[sync] step=cleanDevDir starting, root={}",
-            workspace.root_path
-        );
+        let step = StepScope::new("cleanDevDir");
+        info!("[sync] root={}", workspace.root_path);
         if let Err(e) = self.clean_dev_dir(&workspace, &channel).await {
             error!("[sync] step=cleanDevDir failed: {e}");
+            step.failed();
             let _ = channel.send(SyncEvent::SyncFailed {
                 step: "cleanDevDir".to_string(),
                 error: e.to_string(),
@@ -148,11 +149,12 @@ impl SyncOrchestrator {
             );
             return Err(e);
         }
-        info!("[sync] step=cleanDevDir done");
+        step.done("");
 
         // Step 3: p4 sync
+        let step = StepScope::new("p4Sync");
         info!(
-            "[sync] step=p4Sync starting, target_cl={}",
+            "[sync] target_cl={}",
             options.target_cl.as_deref().unwrap_or("none")
         );
         let cancel_token = CancellationToken::new();
@@ -167,6 +169,7 @@ impl SyncOrchestrator {
 
         if let Err(e) = files_result {
             if matches!(e, AppError::Cancelled) {
+                step.cancelled();
                 let _ = channel.send(SyncEvent::SyncCancelled {
                     step: "p4Sync".to_string(),
                 });
@@ -180,6 +183,7 @@ impl SyncOrchestrator {
                 return Ok(());
             }
             error!("[sync] step=p4Sync failed: {e}");
+            step.failed();
             let _ = channel.send(SyncEvent::SyncFailed {
                 step: "p4Sync".to_string(),
                 error: e.to_string(),
@@ -194,14 +198,14 @@ impl SyncOrchestrator {
             return Err(e);
         }
         let files_synced = files_result.unwrap();
-        info!("[sync] step=p4Sync done, files_synced={files_synced}");
+        step.done(&format!("files_synced={files_synced}"));
 
         // Step 3b: Force sync Engine files (non-fatal, per D-03)
         // Only runs when an explicit changelist is provided. An empty changelist
         // means a lightweight project-only update — skip the Engine force sync
         // entirely (and emit no forceSync events) per FORCESYNC-COND-01.
         if target_cl.is_some() {
-            info!("[sync] step=forceSync starting");
+            let step = StepScope::new("forceSync");
             let force_cancel = CancellationToken::new();
             self.process_manager
                 .set_cancel_token(force_cancel.clone())
@@ -210,14 +214,16 @@ impl SyncOrchestrator {
                 .force_sync_engine_step(&workspace, &channel, force_cancel)
                 .await;
             self.process_manager.clear_tracked().await;
-            info!("[sync] step=forceSync done");
+            step.done("");
         } else {
             info!("[sync] step=forceSync skipped (no target changelist)");
         }
 
         // Step 4: GenerateProjectFiles
+        let step = StepScope::new("genProject");
         if let Err(e) = self.gen_project(&workspace, &channel).await {
             error!("[sync] step=genProject failed: {e}");
+            step.failed();
             let _ = channel.send(SyncEvent::SyncFailed {
                 step: "genProject".to_string(),
                 error: e.to_string(),
@@ -231,7 +237,7 @@ impl SyncOrchestrator {
             );
             return Err(e);
         }
-        info!("[sync] step=genProject done");
+        step.done("");
 
         // Use target_cl directly when specified — get_have_changelist would return
         // the wrong CL because excluded paths (Binaries, etc.) remain at higher CLs
