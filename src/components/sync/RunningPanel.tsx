@@ -4,6 +4,8 @@ import { ProgressSection } from "./ProgressSection";
 import { LogViewer } from "./LogViewer";
 import { Button } from "@/components/ui/button";
 import { Loader2 } from "lucide-react";
+import { info } from "@tauri-apps/plugin-log";
+import { useEffect, useRef } from "react";
 
 interface RunningPanelProps {
   stepStatuses: Record<SyncStep, StepStatus>;
@@ -36,6 +38,39 @@ export function RunningPanel({
     currentStep === "genProject" ||
     (currentStep as string) === "forceSync" ||
     p4SyncOverrun;
+
+  // Log ONLY on state TRANSITION (on→off / off→on) to avoid flooding the file
+  // (p4SyncOverrun depends on progress.current/total which tick hundreds of
+  // times per second during a big sync). One diagnostic line per flip.
+  const prev = useRef<boolean | null>(null);
+  useEffect(() => {
+    const next = isIndeterminate;
+    if (prev.current === null) {
+      prev.current = next;
+      return;
+    }
+    if (prev.current === next) return;
+    const stepLabel = currentStep ?? "null";
+    const currentLabel = `${progress.current}/${progress.total}`;
+    if (next) {
+      const reason =
+        currentStep === "genProject"
+          ? "genProject"
+          : (currentStep as string) === "forceSync"
+            ? "forceSync"
+            : p4SyncOverrun
+              ? "p4SyncOverrun"
+              : "unknown";
+      info(
+        `[ui] Working ON reason=${reason} step=${stepLabel} current=${currentLabel}`,
+      ).catch(() => {});
+    } else {
+      info(
+        `[ui] Working OFF step=${stepLabel} current=${currentLabel}`,
+      ).catch(() => {});
+    }
+    prev.current = next;
+  }, [isIndeterminate, currentStep, progress.current, progress.total, p4SyncOverrun]);
   return (
     <div className="flex h-full flex-col">
       <StepIndicator
