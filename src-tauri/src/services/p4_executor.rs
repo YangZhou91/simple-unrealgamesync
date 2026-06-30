@@ -478,6 +478,10 @@ impl P4Executor {
         Ok(None)
     }
 
+    #[allow(clippy::too_many_arguments)] // 8 args: sync_log_dir added by
+    // quick-260630-srw; grouping into a builder would be disproportionate for
+    // a quick task (the existing drain args are already coupled to the p4
+    // spawn + IPC channel + cancellation trio).
     pub async fn sync(
         &self,
         workspace: &WorkspaceConfig,
@@ -486,6 +490,7 @@ impl P4Executor {
         options: &SyncOptions,
         total: Arc<AtomicU64>,
         process_manager: Option<Arc<ProcessManager>>,
+        sync_log_dir: Option<std::path::PathBuf>,
     ) -> Result<u64, AppError> {
         // Validate target_cl if provided
         if let Some(ref cl) = options.target_cl {
@@ -558,6 +563,19 @@ impl P4Executor {
         // not cross tokio::spawn). Re-scoped inside the task via scope_run_with
         // so every line this drain logs carries [run=<id>].
         let run_id = RUN_ID.try_with(|r| r.clone()).ok();
+        // quick-260630-srw: open the per-run sync file writer keyed on the
+        // SAME run_id used for the [run=<id>] log tags, so the per-run file
+        // name (sync-<run_id>.log) 1:1-correlates with the main log's run
+        // tags. Best-effort: None means "no file logging this run" (dir
+        // missing / resolver error) and sync proceeds normally. The writer
+        // is moved INTO the stdout_task closure (single owner — no clone).
+        let mut sync_writer = sync_log_dir
+            .as_deref()
+            .and_then(|dir| {
+                let id = run_id.as_deref().unwrap_or("unknown");
+                crate::utils::sync_run_log::SyncRunFileWriter::open(dir, id)
+            })
+            .unwrap_or_else(crate::utils::sync_run_log::SyncRunFileWriter::disabled);
         let stdout_task = tokio::spawn(async move {
             // Phase 12 / D-09: catch_unwind_future keeps a panic from silently
             // killing the drain while child.wait() in the select! below hangs on
@@ -580,6 +598,20 @@ impl P4Executor {
                             fc.load(Ordering::Relaxed)
                         };
                         let current_file = extract_sync_file_path(&line);
+                        // quick-260630-srw: write ONLY matched-file lines to
+                        // the per-run file — one entry per increment — so log
+                        // entry #N maps 1:1 to the frontend progress bar
+                        // reaching N. Non-file p4 lines (progress dots etc.)
+                        // are skipped (they do not increment fc). Best-effort:
+                        // write_line swallows all io errors internally (the
+                        // drain never propagates a file-write failure).
+                        if parse_sync_file_count(&line) > 0 {
+                            sync_writer.write_line(
+                                current,
+                                total_reader.load(Ordering::Relaxed),
+                                &line,
+                            );
+                        }
                         log_buf.push(line);
                         // Flush log batch when buffer reaches 500 lines or 200ms has elapsed.
                         // Reduces IPC calls from ~226K per-line sends to ~1130 batch sends.
@@ -600,6 +632,11 @@ impl P4Executor {
                                 stream: "stdout".to_string(),
                             });
                             last_log_flush = std::time::Instant::now();
+                            // quick-260630-srw: piggy-back a per-run file
+                            // flush on the existing 500-line / 200ms cadence
+                            // so the BufWriter drains to disk periodically
+                            // (best-effort; flush swallows errors).
+                            sync_writer.flush();
                             // D-01 per-batch count summary — ONE line per flush,
                             // guarded by log_enabled! (HOTUI-13 eager-eval rule).
                             // Counts-only — never raw line text (T-12-DR-1).
@@ -641,6 +678,10 @@ impl P4Executor {
                             lines: log_buf,
                             stream: "stdout".to_string(),
                         });
+                        // quick-260630-srw: final per-run file flush before
+                        // the drain task ends (the writer's Drop will flush
+                        // once more on scope exit — belt-and-suspenders).
+                        sync_writer.flush();
                         // D-01: final partial-batch summary — same shape, guarded.
                         if log::log_enabled!(log::Level::Debug) {
                             crate::utils::log::debug!(
@@ -832,6 +873,7 @@ impl P4Executor {
         channel: &CountingChannel,
         cancel: CancellationToken,
         process_manager: Option<Arc<ProcessManager>>,
+        sync_log_dir: Option<std::path::PathBuf>,
     ) -> Result<(), AppError> {
         let args = build_force_sync_args();
         let args_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
@@ -868,6 +910,21 @@ impl P4Executor {
         let ch_out = channel.clone();
         // Phase 12 / D-02: capture RUN_ID before spawn.
         let run_id = RUN_ID.try_with(|r| r.clone()).ok();
+        // quick-260630-srw: open the per-run writer from the SAME run_id + dir
+        // as the primary sync drain. Because the filename is keyed only on
+        // run_id (NOT on drain), force-sync appends to the SAME
+        // sync-<run_id>.log the primary sync wrote, continuing the per-file
+        // counter correlation. Force-sync has no dry-run total, so each
+        // matched line is written with total=0 (printed verbatim — never a
+        // divisor); the per-file counter is local to this drain. Best-effort:
+        // None means no file logging; the drain proceeds normally.
+        let mut sync_writer = sync_log_dir
+            .as_deref()
+            .and_then(|dir| {
+                let id = run_id.as_deref().unwrap_or("unknown");
+                crate::utils::sync_run_log::SyncRunFileWriter::open(dir, id)
+            })
+            .unwrap_or_else(crate::utils::sync_run_log::SyncRunFileWriter::disabled);
         let stdout_task = tokio::spawn(async move {
             // Phase 12 / D-09: catch_unwind_future wrap (async-aware twin of
             // std::catch_unwind — see p4 sync stdout_task for rationale).
@@ -876,7 +933,19 @@ impl P4Executor {
                     let mut lines = BufReader::new(stdout).lines();
                     let mut log_buf: Vec<String> = Vec::with_capacity(500);
                     let mut last_log_flush = std::time::Instant::now();
+                    // quick-260630-srw: local matched-file counter so force-sync
+                    // lines carry a 1-based {current} in the per-run file.
+                    // total is unknown for force-sync (no dry-run); printed
+                    // verbatim as 0 (never a divisor).
+                    let mut fc_force: u64 = 0;
                     while let Ok(Some(line)) = lines.next_line().await {
+                        // quick-260630-srw: write matched-file lines to the
+                        // per-run file (same sync-<run_id>.log as primary
+                        // sync). Best-effort; write_line swallows errors.
+                        if parse_sync_file_count(&line) > 0 {
+                            fc_force += 1;
+                            sync_writer.write_line(fc_force, 0, &line);
+                        }
                         log_buf.push(line);
                         let should_flush_log = log_buf.len() >= 500
                             || last_log_flush.elapsed() >= std::time::Duration::from_millis(200);
@@ -892,6 +961,8 @@ impl P4Executor {
                                 stream: "stdout".to_string(),
                             });
                             last_log_flush = std::time::Instant::now();
+                            // quick-260630-srw: piggy-back per-run file flush.
+                            sync_writer.flush();
                             if log::log_enabled!(log::Level::Debug) {
                                 crate::utils::log::debug!(
                                     "stdout drained stream=stdout lines={} elapsed={}ms",
@@ -908,6 +979,9 @@ impl P4Executor {
                             lines: log_buf,
                             stream: "stdout".to_string(),
                         });
+                        // quick-260630-srw: final per-run file flush (Drop
+                        // flushes once more on scope exit).
+                        sync_writer.flush();
                         if log::log_enabled!(log::Level::Debug) {
                             crate::utils::log::debug!(
                                 "stdout drained stream=stdout lines={} elapsed={}ms",

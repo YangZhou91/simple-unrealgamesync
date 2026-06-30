@@ -84,6 +84,16 @@ impl SyncRunFileWriter {
         }
     }
 
+    /// A disabled writer (inner `None`) — every method is a no-op. Used by
+    /// callers that want a single non-Option handle regardless of whether the
+    /// per-run file could be opened (`open(...).unwrap_or_else(disabled)`),
+    /// so drain code can call `write_line`/`flush` unconditionally without an
+    /// `if let Some(..)` guard at every site. This matches the plan's
+    /// `sync_writer.write_line(...)` call shape.
+    pub fn disabled() -> Self {
+        Self { writer: None }
+    }
+
     /// Append one `{current}/{total} {redacted}\n` line. Best-effort: on any
     /// io error the inner writer latches to `None` (no retry on a broken
     /// handle — the drain must not stall). A no-op once latched.

@@ -6,10 +6,10 @@ use crate::services::process_manager::ProcessManager;
 use crate::services::workspace::WorkspaceService;
 use crate::utils::counting_channel::CountingChannel;
 use crate::utils::log::StepScope;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_log::log::{error, info, warn};
 use tokio_util::sync::CancellationToken;
 
@@ -163,7 +163,7 @@ impl SyncOrchestrator {
             .await;
 
         let files_result = self
-            .p4_sync(&workspace, &channel, cancel_token, &options)
+            .p4_sync(&workspace, &channel, cancel_token, &options, &app)
             .await;
         self.process_manager.clear_tracked().await;
 
@@ -211,7 +211,7 @@ impl SyncOrchestrator {
                 .set_cancel_token(force_cancel.clone())
                 .await;
             let _ = self
-                .force_sync_engine_step(&workspace, &channel, force_cancel)
+                .force_sync_engine_step(&workspace, &channel, force_cancel, &app)
                 .await;
             self.process_manager.clear_tracked().await;
             step.done("");
@@ -386,7 +386,7 @@ impl SyncOrchestrator {
         };
 
         let files_result = self
-            .p4_sync(&workspace, &channel, cancel_token, &options)
+            .p4_sync(&workspace, &channel, cancel_token, &options, &app)
             .await;
         self.process_manager.clear_tracked().await;
 
@@ -429,7 +429,7 @@ impl SyncOrchestrator {
             .set_cancel_token(force_cancel.clone())
             .await;
         let _ = self
-            .force_sync_engine_step(&workspace, &channel, force_cancel)
+            .force_sync_engine_step(&workspace, &channel, force_cancel, &app)
             .await;
         self.process_manager.clear_tracked().await;
         step.done("");
@@ -560,7 +560,7 @@ impl SyncOrchestrator {
                     .set_cancel_token(cancel_token.clone())
                     .await;
                 let result = self
-                    .p4_sync(&workspace, &channel, cancel_token, &options)
+                    .p4_sync(&workspace, &channel, cancel_token, &options, &app)
                     .await;
                 self.process_manager.clear_tracked().await;
                 match result {
@@ -592,7 +592,7 @@ impl SyncOrchestrator {
                     .set_cancel_token(cancel_token.clone())
                     .await;
                 let _ = self
-                    .force_sync_engine_step(&workspace, &channel, cancel_token)
+                    .force_sync_engine_step(&workspace, &channel, cancel_token, &app)
                     .await;
                 self.process_manager.clear_tracked().await;
                 s.done("");
@@ -730,6 +730,7 @@ impl SyncOrchestrator {
         channel: &CountingChannel,
         cancel: CancellationToken,
         options: &SyncOptions,
+        app: &AppHandle,
     ) -> Result<u64, AppError> {
         let description = match &options.target_cl {
             Some(cl) => format!("Syncing to CL #{}...", cl),
@@ -787,6 +788,13 @@ impl SyncOrchestrator {
             return Err(AppError::Cancelled);
         }
 
+        // quick-260630-srw: resolve the app log dir ONCE and thread it into
+        // the primary + force syncs so each matched file is appended to a
+        // per-run file sync-<run_id>.log in this dir. Best-effort: if the
+        // resolver errors, pass None and sync proceeds without file logging.
+        // Mirrors commands/log.rs:current_log_path's app_log_dir() resolution.
+        let sync_log_dir: Option<PathBuf> = app.path().app_log_dir().ok();
+
         let files_synced = self
             .p4
             .sync(
@@ -796,6 +804,7 @@ impl SyncOrchestrator {
                 options,
                 total.clone(),
                 Some(self.process_manager.clone()),
+                sync_log_dir.clone(),
             )
             .await;
 
@@ -829,7 +838,14 @@ impl SyncOrchestrator {
         workspace: &WorkspaceConfig,
         channel: &CountingChannel,
         cancel: CancellationToken,
+        app: &AppHandle,
     ) -> Result<(), AppError> {
+        // quick-260630-srw: resolve the per-run sync log dir here so force-sync
+        // appends to the SAME sync-<run_id>.log the primary sync wrote (run_id
+        // is shared via the task_local RUN_ID scope). Best-effort: None on
+        // resolver error — force-sync proceeds without file logging.
+        let sync_log_dir: Option<PathBuf> = app.path().app_log_dir().ok();
+
         let _ = channel.send(SyncEvent::StepStarted {
             step: "forceSync".to_string(),
             description: "Force syncing Engine files...".to_string(),
@@ -842,6 +858,7 @@ impl SyncOrchestrator {
                 channel,
                 cancel,
                 Some(self.process_manager.clone()),
+                sync_log_dir,
             )
             .await
         {
