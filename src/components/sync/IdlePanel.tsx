@@ -20,6 +20,12 @@ interface IdlePanelProps {
   gitBranchLoading: boolean;
   behindInfo: P4BehindInfo | null;
   behindLoading: boolean;
+  // Optional with defaults so existing test fixtures (and any other caller)
+  // keep type-checking — App.tsx always threads both. null stream renders the
+  // pinned `classic client` placeholder; null p4Client renders an empty Client
+  // value (App never lets that happen at runtime).
+  stream?: string | null;
+  p4Client?: string | null;
 }
 
 export function IdlePanel({
@@ -34,6 +40,8 @@ export function IdlePanel({
   gitBranchLoading,
   behindInfo,
   behindLoading,
+  stream = null,
+  p4Client = null,
 }: IdlePanelProps) {
   const [clError, setClError] = useState<string | null>(null);
 
@@ -48,6 +56,17 @@ export function IdlePanel({
 
   return (
     <div className="flex h-full flex-col items-center justify-center gap-4 pt-12">
+      <div className="text-center space-y-0.5">
+        <p className="text-xs text-muted-foreground">
+          Stream:{" "}
+          <span className="font-mono">
+            {stream ?? "classic client"}
+          </span>
+        </p>
+        <p className="text-xs text-muted-foreground">
+          Client: <span className="font-mono">{p4Client}</span>
+        </p>
+      </div>
       {lastSyncResult ? (
         <div className="text-center space-y-2">
           <p className="text-sm text-foreground">

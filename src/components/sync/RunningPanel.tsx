@@ -15,6 +15,10 @@ interface RunningPanelProps {
   stepDescriptions: Record<SyncStep, string | null>;
   isCancelling?: boolean;
   onCancel: () => void;
+  // Optional with defaults (mirrors isCancelling) so existing test fixtures
+  // keep type-checking — App.tsx always threads both via SyncDashboard.
+  stream?: string | null;
+  p4Client?: string | null;
 }
 
 export function RunningPanel({
@@ -25,6 +29,8 @@ export function RunningPanel({
   stepDescriptions,
   isCancelling = false,
   onCancel,
+  stream = null,
+  p4Client = null,
 }: RunningPanelProps) {
   // Switch to indeterminate animation when:
   //   - Running genProject / forceSync (no file progress for these steps)
@@ -73,6 +79,17 @@ export function RunningPanel({
   }, [isIndeterminate, currentStep, progress.current, progress.total, p4SyncOverrun]);
   return (
     <div className="flex h-full flex-col">
+      <div className="text-center space-y-0.5 pt-2">
+        <p className="text-xs text-muted-foreground">
+          Stream:{" "}
+          <span className="font-mono">
+            {stream ?? "classic client"}
+          </span>
+        </p>
+        <p className="text-xs text-muted-foreground">
+          Client: <span className="font-mono">{p4Client}</span>
+        </p>
+      </div>
       <StepIndicator
         stepStatuses={stepStatuses}
         stepDescriptions={stepDescriptions}

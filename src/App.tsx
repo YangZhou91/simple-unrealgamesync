@@ -43,6 +43,11 @@ function App() {
     isSyncRunning || history.isRollingBack || git.gitState === "running";
   const [gitBranchInfo, setGitBranchInfo] = useState<GitBranchInfo | null>(null);
   const [gitBranchLoading, setGitBranchLoading] = useState(false);
+  // P4 stream of the selected workspace's client spec (null = classic client
+  // OR not-yet-fetched OR fetch failed — the UI shows the `classic client`
+  // placeholder in all three cases). Static per-client — fetched once on
+  // workspace switch, never polled.
+  const [streamInfo, setStreamInfo] = useState<string | null>(null);
 
   const fetchGitStatus = useCallback(async () => {
     if (workspaces.selectedWorkspace) {
@@ -64,6 +69,27 @@ function App() {
   useEffect(() => {
     fetchGitStatus();
   }, [fetchGitStatus]);
+
+  // Fetch the bound p4 stream once per workspace switch (mirrors git status —
+  // no loading flag needed; the workspace's p4Client line renders immediately
+  // regardless and stream is fast). Catch -> null so a p4 failure shows the
+  // placeholder instead of an error toast.
+  const fetchStream = useCallback(async () => {
+    if (workspaces.selectedWorkspace) {
+      try {
+        const s = await commands.getWorkspaceStream(workspaces.selectedWorkspace.id);
+        setStreamInfo(s);
+      } catch {
+        setStreamInfo(null);
+      }
+    } else {
+      setStreamInfo(null);
+    }
+  }, [workspaces.selectedWorkspace]);
+
+  useEffect(() => {
+    fetchStream();
+  }, [fetchStream]);
 
   // Idle Perforce behind-check: fires immediately when the idle view loads,
   // then repeats every intervalMinutes. Never runs while a sync is in progress,
@@ -201,6 +227,8 @@ function App() {
             gitBranchLoading={gitBranchLoading}
             behindInfo={behind.behindInfo}
             behindLoading={behind.behindLoading}
+            stream={streamInfo}
+            p4Client={workspaces.selectedWorkspace?.p4Client ?? null}
           />
         )}
       </AppLayout>

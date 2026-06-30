@@ -48,6 +48,10 @@ export function getCurrentCl(workspaceId: string): Promise<string | null> {
   return invoke("get_current_cl", { workspaceId });
 }
 
+export function getWorkspaceStream(workspaceId: string): Promise<string | null> {
+  return invoke("get_workspace_stream", { workspaceId });
+}
+
 export function retryStep(
   workspaceId: string,
   step: string,

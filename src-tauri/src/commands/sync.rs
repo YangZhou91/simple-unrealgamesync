@@ -126,6 +126,29 @@ pub async fn get_current_cl(
     .await
 }
 
+/// Returns the workspace client's bound p4 stream (e.g. `//FYDepot/Art_Stream_UGS_zhouyang`)
+/// via `p4 client -o`'s `Stream:` field. `Ok(None)` means classic client OR p4
+/// failure (both are non-fatal — the stream is display-only and the UI renders
+/// the pinned `classic client` placeholder). Never errors on a p4-side failure.
+#[tauri::command]
+pub async fn get_workspace_stream(
+    app: AppHandle,
+    state: State<'_, Arc<P4Executor>>,
+    workspace_id: String,
+) -> Result<Option<String>, String> {
+    let args_redacted = crate::utils::redact::redact(&format!("workspace_id={workspace_id}"))
+        .into_owned();
+    trace_command("get_workspace_stream", args_redacted, async move {
+        let ws = WorkspaceService::get(&app, &workspace_id)
+            .await
+            .map_err(|e| e.to_string())?;
+        // get_client_stream returns Ok(None) on p4 non-success, so a p4 failure
+        // surfaces here as Ok(None) -> placeholder, NOT as an error string.
+        Ok(state.get_client_stream(&ws).await.map_err(|e| e.to_string())?)
+    })
+    .await
+}
+
 /// Returns whether a sync pipeline is currently running on the backend.
 /// Used by the frontend to detect stale UI state when the WebView was
 /// suspended (e.g. window minimized) and Channel events were lost.

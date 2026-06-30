@@ -42,6 +42,10 @@ interface SyncDashboardProps {
   gitBranchLoading: boolean;
   behindInfo: P4BehindInfo | null;
   behindLoading: boolean;
+  // Optional with defaults so the existing SyncDashboard test fixture keeps
+  // type-checking — App.tsx always threads both at runtime.
+  stream?: string | null;
+  p4Client?: string | null;
 }
 
 export function SyncDashboard({
@@ -75,6 +79,8 @@ export function SyncDashboard({
   gitBranchLoading,
   behindInfo,
   behindLoading,
+  stream = null,
+  p4Client = null,
 }: SyncDashboardProps) {
   const isSyncRunning = syncState === "running";
   const isBusy = isSyncRunning || historyRollingBack || gitState === "running";
@@ -111,6 +117,8 @@ export function SyncDashboard({
             stepDescriptions={stepDescriptions}
             isCancelling={isCancelling}
             onCancel={onStopSync}
+            stream={stream}
+            p4Client={p4Client}
           />
         ) : syncState === "error" && errorInfo ? (
           <ErrorPanel
@@ -141,6 +149,8 @@ export function SyncDashboard({
             gitBranchLoading={gitBranchLoading}
             behindInfo={behindInfo}
             behindLoading={behindLoading}
+            stream={stream}
+            p4Client={p4Client}
           />
         )}
       </TabsContent>

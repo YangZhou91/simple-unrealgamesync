@@ -442,6 +442,42 @@ impl P4Executor {
         }
     }
 
+    /// Read the bound p4 stream of the workspace's client spec via `p4 client -o`.
+    /// Returns `Ok(Some(stream))` when the client has a non-empty `Stream:`
+    /// field (stream-bound client), or `Ok(None)` when the client is classic
+    /// (no `Stream:` line) OR p4 fails (non-success status). Stream is
+    /// informational only — a p4 failure MUST NOT surface as an error to the
+    /// caller; it just means "no stream to show", which the UI renders as the
+    /// pinned `classic client` placeholder.
+    pub async fn get_client_stream(
+        &self,
+        workspace: &WorkspaceConfig,
+    ) -> Result<Option<String>, AppError> {
+        let mut cmd = self.build_p4_command(workspace, &["client", "-o"]);
+        let output = output_with_retry(&mut cmd)
+            .await
+            .map_err(AppError::ProcessSpawn)?;
+
+        if !output.status.success() {
+            return Ok(None);
+        }
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        for line in stdout.lines() {
+            // PINNED parse rule: strip_prefix("Stream:") + trim(). No regex,
+            // no split-on-whitespace — `p4 client -o` emits `Stream: <path>`
+            // with a single leading space after the colon.
+            if let Some(rest) = line.strip_prefix("Stream:") {
+                let s = rest.trim();
+                if !s.is_empty() {
+                    return Ok(Some(s.to_string()));
+                }
+                return Ok(None);
+            }
+        }
+        Ok(None)
+    }
+
     pub async fn sync(
         &self,
         workspace: &WorkspaceConfig,
