@@ -5,6 +5,12 @@ interface ProgressSectionProps {
   total: number;
   currentFile: string;
   indeterminate?: boolean;
+  // "What step" text shown in place of the bare "Working…" literal when
+  // indeterminate. Falls back to "Working…" if omitted (preserves prior behavior).
+  indeterminateLabel?: string;
+  // Live liveness line (latest log line) rendered BELOW the bar during
+  // indeterminate mode, in the same style as `currentFile`.
+  indeterminateDetail?: string;
 }
 
 export function ProgressSection({
@@ -12,6 +18,8 @@ export function ProgressSection({
   total,
   currentFile,
   indeterminate = false,
+  indeterminateLabel,
+  indeterminateDetail,
 }: ProgressSectionProps) {
   // When current exceeds the dry-run estimate (new CLs arrived mid-sync),
   // show "N+ files…" instead of "N/N files" so the user knows it's still running.
@@ -26,7 +34,7 @@ export function ProgressSection({
   return (
     <div className="flex flex-col gap-1.5 px-6 py-2">
       <span className="text-sm text-foreground">
-        {indeterminate ? "Working…" : fileText}
+        {indeterminate ? (indeterminateLabel ?? "Working…") : fileText}
       </span>
       <Progress
         value={indeterminate ? undefined : pct}
@@ -36,6 +44,11 @@ export function ProgressSection({
       {currentFile && (
         <span className="text-xs text-muted font-mono truncate">
           {currentFile}
+        </span>
+      )}
+      {indeterminate && indeterminateDetail && (
+        <span className="text-xs text-muted font-mono truncate">
+          {indeterminateDetail}
         </span>
       )}
     </div>
