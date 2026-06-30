@@ -2,12 +2,12 @@ use crate::error::AppError;
 use crate::models::{ChangelistEntry, SyncEvent, WorkspaceConfig};
 use crate::services::process_manager::ProcessManager;
 use crate::utils::counting_channel::CountingChannel;
+use crate::utils::log::{render_cancelled_line, render_exited_line, render_spawned_line, scope_run_with, RUN_ID, StepScope};
 use std::path::Path;
 use std::process::Stdio;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use tauri_plugin_log::log::{info, warn};
-use crate::utils::log::{render_cancelled_line, render_exited_line, render_spawned_line, StepScope};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
 use tokio::sync::Mutex;
@@ -518,99 +518,193 @@ impl P4Executor {
         let fc = file_count.clone();
         let total_reader = total.clone();
         let lps = last_progress_sent.clone();
+        // Phase 12 / D-02: capture RUN_ID ONCE before spawn (task_local does
+        // not cross tokio::spawn). Re-scoped inside the task via scope_run_with
+        // so every line this drain logs carries [run=<id>].
+        let run_id = RUN_ID.try_with(|r| r.clone()).ok();
         let stdout_task = tokio::spawn(async move {
-            let mut lines = stdout_reader.lines();
-            let mut log_buf: Vec<String> = Vec::with_capacity(500);
-            let mut last_log_flush = std::time::Instant::now();
-            while let Ok(Some(line)) = lines.next_line().await {
-                let current = if parse_sync_file_count(&line) > 0 {
-                    fc.fetch_add(1, Ordering::Relaxed) + 1
-                } else {
-                    fc.load(Ordering::Relaxed)
-                };
-                let current_file = extract_sync_file_path(&line);
-                log_buf.push(line);
-                // Flush log batch when buffer reaches 500 lines or 200ms has elapsed.
-                // Reduces IPC calls from ~226K per-line sends to ~1130 batch sends.
-                let should_flush_log = log_buf.len() >= 500
-                    || last_log_flush.elapsed() >= std::time::Duration::from_millis(200);
-                if should_flush_log {
-                    let batch = std::mem::take(&mut log_buf);
-                    let _ = ch.send(SyncEvent::LogBatch {
-                        lines: batch,
-                        stream: "stdout".to_string(),
-                    });
-                    last_log_flush = std::time::Instant::now();
-                }
-                // Throttle Progress events to ~200ms intervals to avoid UI freeze
-                let should_send = {
-                    let mut guard = lps.lock().unwrap();
-                    if guard.elapsed() >= std::time::Duration::from_millis(200) {
-                        *guard = std::time::Instant::now();
-                        true
-                    } else {
-                        false
+            // Phase 12 / D-09: catch_unwind_future keeps a panic from silently
+            // killing the drain while child.wait() in the select! below hangs on
+            // a pipe the dead task is no longer reading (RESEARCH Pitfall 5). On
+            // Err the panic payload is Display-rendered via panic_payload_as_str
+            // (NEVER {:?} — SC#3 gate) and logged as warn!. `catch_unwind_future`
+            // (utils/log.rs) is the async-aware twin of std::catch_unwind — the
+            // naive `catch_unwind(AssertUnwindSafe(async {...}))` shape does NOT
+            // compile (catch_unwind requires FnOnce(), an async block is a Future);
+            // the helper polls the inner future inside catch_unwind instead.
+            if let Err(payload) = crate::utils::log::catch_unwind_future(async move {
+                scope_run_with(run_id, async move {
+                    let mut lines = stdout_reader.lines();
+                    let mut log_buf: Vec<String> = Vec::with_capacity(500);
+                    let mut last_log_flush = std::time::Instant::now();
+                    while let Ok(Some(line)) = lines.next_line().await {
+                        let current = if parse_sync_file_count(&line) > 0 {
+                            fc.fetch_add(1, Ordering::Relaxed) + 1
+                        } else {
+                            fc.load(Ordering::Relaxed)
+                        };
+                        let current_file = extract_sync_file_path(&line);
+                        log_buf.push(line);
+                        // Flush log batch when buffer reaches 500 lines or 200ms has elapsed.
+                        // Reduces IPC calls from ~226K per-line sends to ~1130 batch sends.
+                        let should_flush_log = log_buf.len() >= 500
+                            || last_log_flush.elapsed() >= std::time::Duration::from_millis(200);
+                        if should_flush_log {
+                            // Phase 12 / D-01: capture batch length + flush-start
+                            // BEFORE mem::take resets log_buf (batch owns the
+                            // post-take count; flush_start yields the
+                            // since-previous-flush elapsed after reset).
+                            let batch_len = log_buf.len();
+                            let flush_start = last_log_flush;
+                            let current_files = fc.load(Ordering::Relaxed);
+                            let total_files = total_reader.load(Ordering::Relaxed);
+                            let batch = std::mem::take(&mut log_buf);
+                            let _ = ch.send(SyncEvent::LogBatch {
+                                lines: batch,
+                                stream: "stdout".to_string(),
+                            });
+                            last_log_flush = std::time::Instant::now();
+                            // D-01 per-batch count summary — ONE line per flush,
+                            // guarded by log_enabled! (HOTUI-13 eager-eval rule).
+                            // Counts-only — never raw line text (T-12-DR-1).
+                            if log::log_enabled!(log::Level::Debug) {
+                                crate::utils::log::debug!(
+                                    "stdout drained stream=stdout lines={} elapsed={}ms current={} total={}",
+                                    batch_len,
+                                    flush_start.elapsed().as_millis(),
+                                    current_files,
+                                    total_files
+                                );
+                            }
+                        }
+                        // Throttle Progress events to ~200ms intervals to avoid UI freeze
+                        let should_send = {
+                            let mut guard = lps.lock().unwrap();
+                            if guard.elapsed() >= std::time::Duration::from_millis(200) {
+                                *guard = std::time::Instant::now();
+                                true
+                            } else {
+                                false
+                            }
+                        };
+                        if should_send {
+                            let _ = ch.send(SyncEvent::Progress {
+                                current,
+                                total: total_reader.load(Ordering::Relaxed),
+                                current_file,
+                            });
+                        }
                     }
-                };
-                if should_send {
-                    let _ = ch.send(SyncEvent::Progress {
-                        current,
-                        total: total_reader.load(Ordering::Relaxed),
-                        current_file,
-                    });
-                }
-            }
-            // Flush any remaining lines not yet sent
-            if !log_buf.is_empty() {
-                let _ = ch.send(SyncEvent::LogBatch {
-                    lines: log_buf,
-                    stream: "stdout".to_string(),
-                });
-            }
-            // D-05 (Phase 12 / HOTUI-12): per-completion counter summary for the
-            // stdout drain family (the p4-sync stdout drain has no heartbeat
-            // host of its own — the heartbeat above is a separate task). ONE
-            // line per drain per run, O(1) — NOT per-event. log_enabled! guard
-            // mandatory (HOTUI-13 eager-eval rule).
-            if log::log_enabled!(log::Level::Debug) {
-                crate::utils::log::debug!(
-                    "ipc.channel drain complete stream=stdout sent_total={}",
-                    ch.count()
-                );
+                    // Flush any remaining lines not yet sent
+                    if !log_buf.is_empty() {
+                        let batch_len = log_buf.len();
+                        let flush_start = last_log_flush;
+                        let current_files = fc.load(Ordering::Relaxed);
+                        let total_files = total_reader.load(Ordering::Relaxed);
+                        let _ = ch.send(SyncEvent::LogBatch {
+                            lines: log_buf,
+                            stream: "stdout".to_string(),
+                        });
+                        // D-01: final partial-batch summary — same shape, guarded.
+                        if log::log_enabled!(log::Level::Debug) {
+                            crate::utils::log::debug!(
+                                "stdout drained stream=stdout lines={} elapsed={}ms current={} total={}",
+                                batch_len,
+                                flush_start.elapsed().as_millis(),
+                                current_files,
+                                total_files
+                            );
+                        }
+                    }
+                    // D-05 (Phase 12 / HOTUI-12): per-completion counter summary
+                    // for the stdout drain family (the p4-sync stdout drain has
+                    // no heartbeat host of its own — the heartbeat above is a
+                    // separate task). ONE line per drain per run, O(1) — NOT
+                    // per-event. log_enabled! guard mandatory.
+                    if log::log_enabled!(log::Level::Debug) {
+                        crate::utils::log::debug!(
+                            "ipc.channel drain complete stream=stdout sent_total={}",
+                            ch.count()
+                        );
+                    }
+                })
+                .await;
+            })
+            .await
+            {
+                let msg = crate::utils::log::panic_payload_as_str(&payload);
+                warn!("[drain] panic caught stream=stdout msg={}", msg);
             }
         });
 
         let ch_err = channel.clone();
+        // Phase 12 / D-02: capture RUN_ID before spawn (task_local does not
+        // cross tokio::spawn).
+        let run_id = RUN_ID.try_with(|r| r.clone()).ok();
         let stderr_task = tokio::spawn(async move {
-            let mut lines = stderr_reader.lines();
-            let mut log_buf: Vec<String> = Vec::with_capacity(64);
-            let mut last_log_flush = std::time::Instant::now();
-            while let Ok(Some(line)) = lines.next_line().await {
-                log_buf.push(line);
-                let should_flush_log = log_buf.len() >= 500
-                    || last_log_flush.elapsed() >= std::time::Duration::from_millis(200);
-                if should_flush_log {
-                    let batch = std::mem::take(&mut log_buf);
-                    let _ = ch_err.send(SyncEvent::LogBatch {
-                        lines: batch,
-                        stream: "stderr".to_string(),
-                    });
-                    last_log_flush = std::time::Instant::now();
-                }
-            }
-            if !log_buf.is_empty() {
-                let _ = ch_err.send(SyncEvent::LogBatch {
-                    lines: log_buf,
-                    stream: "stderr".to_string(),
-                });
-            }
-            // D-05 (Phase 12 / HOTUI-12): per-completion counter summary for the
-            // stderr drain family — ONE line per drain per run.
-            if log::log_enabled!(log::Level::Debug) {
-                crate::utils::log::debug!(
-                    "ipc.channel drain complete stream=stderr sent_total={}",
-                    ch_err.count()
-                );
+            // Phase 12 / D-09: catch_unwind_future wrap (async-aware twin of
+            // std::catch_unwind — see stdout_task above for rationale).
+            if let Err(payload) = crate::utils::log::catch_unwind_future(async move {
+                scope_run_with(run_id, async move {
+                    let mut lines = stderr_reader.lines();
+                    let mut log_buf: Vec<String> = Vec::with_capacity(64);
+                    let mut last_log_flush = std::time::Instant::now();
+                    while let Ok(Some(line)) = lines.next_line().await {
+                        log_buf.push(line);
+                        let should_flush_log = log_buf.len() >= 500
+                            || last_log_flush.elapsed() >= std::time::Duration::from_millis(200);
+                        if should_flush_log {
+                            // Phase 12 / D-01: stderr does not track fc/total
+                            // (it only buffers) — the summary uses lines +
+                            // elapsed + stream only (CONTEXT discretion: the
+                            // line stays a count summary; current/total trimmed).
+                            let batch_len = log_buf.len();
+                            let flush_start = last_log_flush;
+                            let batch = std::mem::take(&mut log_buf);
+                            let _ = ch_err.send(SyncEvent::LogBatch {
+                                lines: batch,
+                                stream: "stderr".to_string(),
+                            });
+                            last_log_flush = std::time::Instant::now();
+                            if log::log_enabled!(log::Level::Debug) {
+                                crate::utils::log::debug!(
+                                    "stderr drained stream=stderr lines={} elapsed={}ms",
+                                    batch_len,
+                                    flush_start.elapsed().as_millis()
+                                );
+                            }
+                        }
+                    }
+                    if !log_buf.is_empty() {
+                        let batch_len = log_buf.len();
+                        let flush_start = last_log_flush;
+                        let _ = ch_err.send(SyncEvent::LogBatch {
+                            lines: log_buf,
+                            stream: "stderr".to_string(),
+                        });
+                        if log::log_enabled!(log::Level::Debug) {
+                            crate::utils::log::debug!(
+                                "stderr drained stream=stderr lines={} elapsed={}ms",
+                                batch_len,
+                                flush_start.elapsed().as_millis()
+                            );
+                        }
+                    }
+                    // D-05 (Phase 12 / HOTUI-12): per-completion counter summary
+                    // for the stderr drain family — ONE line per drain per run.
+                    if log::log_enabled!(log::Level::Debug) {
+                        crate::utils::log::debug!(
+                            "ipc.channel drain complete stream=stderr sent_total={}",
+                            ch_err.count()
+                        );
+                    }
+                })
+                .await;
+            })
+            .await
+            {
+                let msg = crate::utils::log::panic_payload_as_str(&payload);
+                warn!("[drain] panic caught stream=stderr msg={}", msg);
             }
         });
 
@@ -619,32 +713,38 @@ impl P4Executor {
         let ch_heartbeat = channel.clone();
         let fc_heartbeat = file_count.clone();
         let total_heartbeat = total.clone();
+        // Phase 12 / D-02: capture RUN_ID before the heartbeat spawn so the
+        // Plan 12-01 counter line carries [run=<id>].
+        let run_id = RUN_ID.try_with(|r| r.clone()).ok();
         let heartbeat_task = tokio::spawn(async move {
-            let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(5));
-            loop {
-                interval.tick().await;
-                let current = fc_heartbeat.load(Ordering::Relaxed);
-                let total = total_heartbeat.load(Ordering::Relaxed);
-                // Send heartbeat to show the sync is still alive
-                let _ = ch_heartbeat.send(SyncEvent::Progress {
-                    current,
-                    total,
-                    current_file: String::new(),
-                });
-                // D-05 (Phase 12 / HOTUI-12): sample the IPC-channel send counter
-                // on every 5s tick — ONE line per tick (O(seconds-per-sync), NOT
-                // per-event). `ch_heartbeat` is a CountingChannel clone, so its
-                // `.count()` reads the Arc-shared total incremented by every
-                // stdout/stderr/heartbeat/orchestrator `.send()`. The
-                // `log_enabled!(Debug)` guard is MANDATORY (HOTUI-13 eager-eval
-                // rule: the `format!` cost is skipped when Debug is compiled out).
-                if log::log_enabled!(log::Level::Debug) {
-                    crate::utils::log::debug!(
-                        "ipc.channel sent total={}",
-                        ch_heartbeat.count()
-                    );
+            scope_run_with(run_id, async move {
+                let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(5));
+                loop {
+                    interval.tick().await;
+                    let current = fc_heartbeat.load(Ordering::Relaxed);
+                    let total = total_heartbeat.load(Ordering::Relaxed);
+                    // Send heartbeat to show the sync is still alive
+                    let _ = ch_heartbeat.send(SyncEvent::Progress {
+                        current,
+                        total,
+                        current_file: String::new(),
+                    });
+                    // D-05 (Phase 12 / HOTUI-12): sample the IPC-channel send counter
+                    // on every 5s tick — ONE line per tick (O(seconds-per-sync), NOT
+                    // per-event). `ch_heartbeat` is a CountingChannel clone, so its
+                    // `.count()` reads the Arc-shared total incremented by every
+                    // stdout/stderr/heartbeat/orchestrator `.send()`. The
+                    // `log_enabled!(Debug)` guard is MANDATORY (HOTUI-13 eager-eval
+                    // rule: the `format!` cost is skipped when Debug is compiled out).
+                    if log::log_enabled!(log::Level::Debug) {
+                        crate::utils::log::debug!(
+                            "ipc.channel sent total={}",
+                            ch_heartbeat.count()
+                        );
+                    }
                 }
-            }
+            })
+            .await;
         });
 
         tokio::select! {
@@ -730,72 +830,139 @@ impl P4Executor {
 
         // Stream stdout as LogBatch events (batched to reduce IPC call count)
         let ch_out = channel.clone();
+        // Phase 12 / D-02: capture RUN_ID before spawn.
+        let run_id = RUN_ID.try_with(|r| r.clone()).ok();
         let stdout_task = tokio::spawn(async move {
-            let mut lines = BufReader::new(stdout).lines();
-            let mut log_buf: Vec<String> = Vec::with_capacity(500);
-            let mut last_log_flush = std::time::Instant::now();
-            while let Ok(Some(line)) = lines.next_line().await {
-                log_buf.push(line);
-                let should_flush_log = log_buf.len() >= 500
-                    || last_log_flush.elapsed() >= std::time::Duration::from_millis(200);
-                if should_flush_log {
-                    let batch = std::mem::take(&mut log_buf);
-                    let _ = ch_out.send(SyncEvent::LogBatch {
-                        lines: batch,
-                        stream: "stdout".to_string(),
-                    });
-                    last_log_flush = std::time::Instant::now();
-                }
-            }
-            if !log_buf.is_empty() {
-                let _ = ch_out.send(SyncEvent::LogBatch {
-                    lines: log_buf,
-                    stream: "stdout".to_string(),
-                });
-            }
-            // D-05 (Phase 12 / HOTUI-12): force-sync has NO heartbeat task, so
-            // the counter line fires as a per-completion summary instead — ONE
-            // line per drain per run, O(1). log_enabled! guard mandatory.
-            if log::log_enabled!(log::Level::Debug) {
-                crate::utils::log::debug!(
-                    "ipc.channel drain complete stream=stdout sent_total={}",
-                    ch_out.count()
-                );
+            // Phase 12 / D-09: catch_unwind_future wrap (async-aware twin of
+            // std::catch_unwind — see p4 sync stdout_task for rationale).
+            if let Err(payload) = crate::utils::log::catch_unwind_future(async move {
+                scope_run_with(run_id, async move {
+                    let mut lines = BufReader::new(stdout).lines();
+                    let mut log_buf: Vec<String> = Vec::with_capacity(500);
+                    let mut last_log_flush = std::time::Instant::now();
+                    while let Ok(Some(line)) = lines.next_line().await {
+                        log_buf.push(line);
+                        let should_flush_log = log_buf.len() >= 500
+                            || last_log_flush.elapsed() >= std::time::Duration::from_millis(200);
+                        if should_flush_log {
+                            // Phase 12 / D-01: force-sync stdout drain has no
+                            // fc/total counters (it only buffers) — summary uses
+                            // lines + elapsed + stream (CONTEXT discretion).
+                            let batch_len = log_buf.len();
+                            let flush_start = last_log_flush;
+                            let batch = std::mem::take(&mut log_buf);
+                            let _ = ch_out.send(SyncEvent::LogBatch {
+                                lines: batch,
+                                stream: "stdout".to_string(),
+                            });
+                            last_log_flush = std::time::Instant::now();
+                            if log::log_enabled!(log::Level::Debug) {
+                                crate::utils::log::debug!(
+                                    "stdout drained stream=stdout lines={} elapsed={}ms",
+                                    batch_len,
+                                    flush_start.elapsed().as_millis()
+                                );
+                            }
+                        }
+                    }
+                    if !log_buf.is_empty() {
+                        let batch_len = log_buf.len();
+                        let flush_start = last_log_flush;
+                        let _ = ch_out.send(SyncEvent::LogBatch {
+                            lines: log_buf,
+                            stream: "stdout".to_string(),
+                        });
+                        if log::log_enabled!(log::Level::Debug) {
+                            crate::utils::log::debug!(
+                                "stdout drained stream=stdout lines={} elapsed={}ms",
+                                batch_len,
+                                flush_start.elapsed().as_millis()
+                            );
+                        }
+                    }
+                    // D-05 (Phase 12 / HOTUI-12): force-sync has NO heartbeat task, so
+                    // the counter line fires as a per-completion summary instead — ONE
+                    // line per drain per run, O(1). log_enabled! guard mandatory.
+                    if log::log_enabled!(log::Level::Debug) {
+                        crate::utils::log::debug!(
+                            "ipc.channel drain complete stream=stdout sent_total={}",
+                            ch_out.count()
+                        );
+                    }
+                })
+                .await;
+            })
+            .await
+            {
+                let msg = crate::utils::log::panic_payload_as_str(&payload);
+                warn!("[drain] panic caught stream=stdout msg={}", msg);
             }
         });
 
         // Stream stderr as LogBatch events (batched to reduce IPC call count)
         let ch_err = channel.clone();
+        // Phase 12 / D-02: capture RUN_ID before spawn.
+        let run_id = RUN_ID.try_with(|r| r.clone()).ok();
         let stderr_task = tokio::spawn(async move {
-            let mut lines = BufReader::new(stderr).lines();
-            let mut log_buf: Vec<String> = Vec::with_capacity(64);
-            let mut last_log_flush = std::time::Instant::now();
-            while let Ok(Some(line)) = lines.next_line().await {
-                log_buf.push(line);
-                let should_flush_log = log_buf.len() >= 500
-                    || last_log_flush.elapsed() >= std::time::Duration::from_millis(200);
-                if should_flush_log {
-                    let batch = std::mem::take(&mut log_buf);
-                    let _ = ch_err.send(SyncEvent::LogBatch {
-                        lines: batch,
-                        stream: "stderr".to_string(),
-                    });
-                    last_log_flush = std::time::Instant::now();
-                }
-            }
-            if !log_buf.is_empty() {
-                let _ = ch_err.send(SyncEvent::LogBatch {
-                    lines: log_buf,
-                    stream: "stderr".to_string(),
-                });
-            }
-            // D-05 (Phase 12 / HOTUI-12): force-sync stderr per-completion
-            // counter summary — ONE line per drain per run.
-            if log::log_enabled!(log::Level::Debug) {
-                crate::utils::log::debug!(
-                    "ipc.channel drain complete stream=stderr sent_total={}",
-                    ch_err.count()
-                );
+            // Phase 12 / D-09: catch_unwind_future wrap (async-aware twin of
+            // std::catch_unwind — see p4 sync stdout_task for rationale).
+            if let Err(payload) = crate::utils::log::catch_unwind_future(async move {
+                scope_run_with(run_id, async move {
+                    let mut lines = BufReader::new(stderr).lines();
+                    let mut log_buf: Vec<String> = Vec::with_capacity(64);
+                    let mut last_log_flush = std::time::Instant::now();
+                    while let Ok(Some(line)) = lines.next_line().await {
+                        log_buf.push(line);
+                        let should_flush_log = log_buf.len() >= 500
+                            || last_log_flush.elapsed() >= std::time::Duration::from_millis(200);
+                        if should_flush_log {
+                            let batch_len = log_buf.len();
+                            let flush_start = last_log_flush;
+                            let batch = std::mem::take(&mut log_buf);
+                            let _ = ch_err.send(SyncEvent::LogBatch {
+                                lines: batch,
+                                stream: "stderr".to_string(),
+                            });
+                            last_log_flush = std::time::Instant::now();
+                            if log::log_enabled!(log::Level::Debug) {
+                                crate::utils::log::debug!(
+                                    "stderr drained stream=stderr lines={} elapsed={}ms",
+                                    batch_len,
+                                    flush_start.elapsed().as_millis()
+                                );
+                            }
+                        }
+                    }
+                    if !log_buf.is_empty() {
+                        let batch_len = log_buf.len();
+                        let flush_start = last_log_flush;
+                        let _ = ch_err.send(SyncEvent::LogBatch {
+                            lines: log_buf,
+                            stream: "stderr".to_string(),
+                        });
+                        if log::log_enabled!(log::Level::Debug) {
+                            crate::utils::log::debug!(
+                                "stderr drained stream=stderr lines={} elapsed={}ms",
+                                batch_len,
+                                flush_start.elapsed().as_millis()
+                            );
+                        }
+                    }
+                    // D-05 (Phase 12 / HOTUI-12): force-sync stderr per-completion
+                    // counter summary — ONE line per drain per run.
+                    if log::log_enabled!(log::Level::Debug) {
+                        crate::utils::log::debug!(
+                            "ipc.channel drain complete stream=stderr sent_total={}",
+                            ch_err.count()
+                        );
+                    }
+                })
+                .await;
+            })
+            .await
+            {
+                let msg = crate::utils::log::panic_payload_as_str(&payload);
+                warn!("[drain] panic caught stream=stderr msg={}", msg);
             }
         });
 

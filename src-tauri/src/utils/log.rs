@@ -97,6 +97,79 @@ pub async fn scope_run_with<R>(run_id: Option<String>, fut: impl std::future::Fu
     }
 }
 
+/// Phase 12 / D-09: async twin of `std::panic::catch_unwind`.
+///
+/// `std::panic::catch_unwind` requires `FnOnce() -> R`; an async block is a
+/// `Future`, not a closure, so the naive `catch_unwind(AssertUnwindSafe(async { ... }))`
+/// shape does NOT compile (the literal shape in the plan is a Rule 3 deviation
+/// — this helper resolves it). `CatchUnwindFuture` wraps a future and polls it
+/// INSIDE `catch_unwind` so a panic during any `.await` point of the inner
+/// future is caught and surfaced as `Err(Box<dyn Any + Send>)` instead of
+/// propagating and silently killing the spawned drain task (RESEARCH Pitfall 5
+/// — a dead drain leaves the pipe unread; `child.wait()` then hangs forever on
+/// a full pipe buffer → freeze). The `AssertUnwindSafe` wrap is required
+/// because `Channel<SyncEvent>` / `Arc` are not `UnwindSafe`; the wrapper
+/// asserts the call sites do not rely on unwind-safety invariants mid-panic
+/// (a panicked drain logs + the sync proceeds to its normal exit/cancel path).
+/// Callers downcast the payload via `panic_payload_as_str` and render it with
+/// `{}` (NEVER `{:?}` — SC#3 gate; T-12-DR-2 mitigation).
+pub fn catch_unwind_future<F>(
+    fut: F,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<F::Output, Box<dyn std::any::Any + Send>>> + Send>>
+where
+    F: std::future::Future + Send + 'static,
+{
+    Box::pin(CatchUnwindFuture::new(fut))
+}
+
+/// Internal: a `Future` wrapper that polls its inner future inside
+/// `catch_unwind`. Mirrors `futures::FutureExt::catch_unwind` without pulling
+/// in the `futures` crate (zero new deps). `pub(crate)` so p4_executor and
+/// git_service can name the type if needed; the ergonomics go through
+/// `catch_unwind_future` above.
+pub(crate) struct CatchUnwindFuture<F>(AssertUnwindSafeStd<F>);
+
+/// Newtype around `std::panic::AssertUnwindSafe` so the crate-local name does
+/// not collide with the re-exported helper. Kept private.
+struct AssertUnwindSafeStd<F>(std::panic::AssertUnwindSafe<F>);
+
+impl<F> CatchUnwindFuture<F> {
+    fn new(fut: F) -> Self {
+        Self(AssertUnwindSafeStd(std::panic::AssertUnwindSafe(fut)))
+    }
+}
+
+impl<F: std::future::Future> std::future::Future for CatchUnwindFuture<F> {
+    type Output = Result<F::Output, Box<dyn std::any::Any + Send>>;
+
+    fn poll(self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<Self::Output> {
+        // SAFETY: CatchUnwindFuture is a newtype over AssertUnwindSafe<F>; we
+        // never move the inner future after construction and the wrapper
+        // implements no `Drop` that observes the inner address. Pin-projection
+        // to the inner field is therefore sound.
+        let inner = unsafe { self.map_unchecked_mut(|this| &mut this.0.0 .0) };
+        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| inner.poll(cx))) {
+            Ok(std::task::Poll::Ready(v)) => std::task::Poll::Ready(Ok(v)),
+            Ok(std::task::Poll::Pending) => std::task::Poll::Pending,
+            Err(payload) => std::task::Poll::Ready(Err(payload)),
+        }
+    }
+}
+
+/// Phase 12 / D-09 helper: downcast a `catch_unwind` panic payload
+/// (`Box<dyn Any + Send>`) to a displayable `&str`, mirroring the panic-hook
+/// downcast at `lib.rs:36-41`. Rendered via `{}` (NEVER `{:?}` — SC#3 gate;
+/// T-12-DR-2 mitigation: `{:?}` would Debug-format the `Box<dyn Any>` and
+/// bypass the line-shape contract). The resulting string still passes through
+/// the `file_formatter` → Phase 10 `redact()` net before hitting disk.
+pub fn panic_payload_as_str(payload: &Box<dyn std::any::Any + Send>) -> &str {
+    payload
+        .downcast_ref::<&str>()
+        .copied()
+        .or_else(|| payload.downcast_ref::<String>().map(|s| s.as_str()))
+        .unwrap_or("<non-string panic payload>")
+}
+
 /// Phase 11 INSTR-08 / D-01: sync twin of `scope_run` for the non-async
 /// commands (`is_sync_running`, `validate_exclusions`). Mirrors the
 /// generate-or-reuse-revert contract via `RUN_ID.sync_scope(value, closure)`,
