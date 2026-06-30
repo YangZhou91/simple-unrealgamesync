@@ -41,6 +41,7 @@ where
 pub struct WorkspaceConfig {
     pub id: String,
     pub name: String,
+    #[serde(rename = "rootPath", alias = "root_path")]
     pub root_path: String,
     #[serde(
         default = "default_project_dir",
@@ -48,10 +49,15 @@ pub struct WorkspaceConfig {
         alias = "project_dir"
     )]
     pub project_dir: String,
+    #[serde(rename = "p4Client", alias = "p4_client")]
     pub p4_client: String,
+    #[serde(rename = "p4User", alias = "p4_user")]
     pub p4_user: String,
+    #[serde(rename = "lastSyncCl", alias = "last_sync_cl")]
     pub last_sync_cl: Option<String>,
+    #[serde(rename = "lastSyncTime", alias = "last_sync_time")]
     pub last_sync_time: Option<String>,
+    #[serde(rename = "lastSyncFileCount", alias = "last_sync_file_count")]
     pub last_sync_file_count: Option<u64>,
     #[serde(
         default = "default_parallel_threads",
