@@ -7,7 +7,7 @@ use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tauri_plugin_log::log::{error, info, warn};
-use crate::utils::log::{render_cancelled_line, render_exited_line};
+use crate::utils::log::{render_cancelled_line, render_exited_line, scope_run_with, RUN_ID};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio_util::sync::CancellationToken;
 
@@ -178,44 +178,105 @@ impl GitService {
         // Stream stdout
         let stdout = child.stdout.take().unwrap();
         let ch_out = channel.clone();
+        // Phase 12 / D-02: capture RUN_ID ONCE before spawn (task_local does
+        // not cross tokio::spawn). Re-scoped inside the task via scope_run_with
+        // so every line this drain logs carries [run=<id>] (closes the Phase 11
+        // deferral — git pull drains were [run=——] pre-12-02).
+        let run_id = RUN_ID.try_with(|r| r.clone()).ok();
         let stdout_task = tokio::spawn(async move {
-            let mut lines = BufReader::new(stdout).lines();
-            while let Ok(Some(line)) = lines.next_line().await {
-                let _ = ch_out.send(SyncEvent::LogLine {
-                    line,
-                    stream: "stdout".to_string(),
-                });
-            }
-            // D-05 (Phase 12 / HOTUI-12): per-completion counter summary for the
-            // git-pull stdout drain — ONE line per drain per run, O(1). git pull
-            // has no heartbeat task, so the counter fires at drain completion.
-            // log_enabled! guard mandatory (HOTUI-13 eager-eval rule).
-            if log::log_enabled!(log::Level::Debug) {
-                crate::utils::log::debug!(
-                    "ipc.channel drain complete stream=stdout sent_total={}",
-                    ch_out.count()
-                );
+            // Phase 12 / D-09: catch_unwind_future keeps a panic from silently
+            // killing the drain (RESEARCH Pitfall 5). On Err the panic payload
+            // is Display-rendered via panic_payload_as_str (NEVER {:?} — SC#3
+            // gate) and logged as warn!. catch_unwind_future is the async-aware
+            // twin of std::catch_unwind (the naive shape does NOT compile — see
+            // utils/log.rs).
+            if let Err(payload) = crate::utils::log::catch_unwind_future(async move {
+                scope_run_with(run_id, async move {
+                    let mut lines = BufReader::new(stdout).lines();
+                    // Phase 12 / D-01 (option b): per-drain line counter for the
+                    // per-completion count summary. git pull is un-batched (one
+                    // LogLine per line) so the per-batch summary shape does not
+                    // apply; instead a single lines=N summary fires at drain
+                    // completion (O(1)/drain, well within the O(hundreds) bound).
+                    let mut line_count: u64 = 0;
+                    while let Ok(Some(line)) = lines.next_line().await {
+                        let _ = ch_out.send(SyncEvent::LogLine {
+                            line,
+                            stream: "stdout".to_string(),
+                        });
+                        line_count += 1;
+                    }
+                    // D-01 per-completion count summary (this drain's line
+                    // throughput) — coexists with the 12-01 sent_total=N line
+                    // below (sent_total reports the Arc-shared TOTAL IPC sends;
+                    // lines= reports THIS drain's local count — different
+                    // signals, both useful). log_enabled!-guarded (HOTUI-13).
+                    if log::log_enabled!(log::Level::Debug) {
+                        crate::utils::log::debug!(
+                            "git drain complete stream=stdout lines={}",
+                            line_count
+                        );
+                    }
+                    // D-05 (Phase 12 / HOTUI-12): per-completion counter summary for the
+                    // git-pull stdout drain — ONE line per drain per run, O(1). git pull
+                    // has no heartbeat task, so the counter fires at drain completion.
+                    // log_enabled! guard mandatory (HOTUI-13 eager-eval rule).
+                    if log::log_enabled!(log::Level::Debug) {
+                        crate::utils::log::debug!(
+                            "ipc.channel drain complete stream=stdout sent_total={}",
+                            ch_out.count()
+                        );
+                    }
+                })
+                .await;
+            })
+            .await
+            {
+                let msg = crate::utils::log::panic_payload_as_str(&payload);
+                warn!("[drain] panic caught stream=stdout msg={}", msg);
             }
         });
 
         // Stream stderr
         let stderr = child.stderr.take().unwrap();
         let ch_err = channel.clone();
+        // Phase 12 / D-02: capture RUN_ID before spawn.
+        let run_id = RUN_ID.try_with(|r| r.clone()).ok();
         let stderr_task = tokio::spawn(async move {
-            let mut lines = BufReader::new(stderr).lines();
-            while let Ok(Some(line)) = lines.next_line().await {
-                let _ = ch_err.send(SyncEvent::LogLine {
-                    line,
-                    stream: "stderr".to_string(),
-                });
-            }
-            // D-05 (Phase 12 / HOTUI-12): git-pull stderr per-completion
-            // counter summary — ONE line per drain per run.
-            if log::log_enabled!(log::Level::Debug) {
-                crate::utils::log::debug!(
-                    "ipc.channel drain complete stream=stderr sent_total={}",
-                    ch_err.count()
-                );
+            // Phase 12 / D-09: catch_unwind_future wrap (see stdout_task above).
+            if let Err(payload) = crate::utils::log::catch_unwind_future(async move {
+                scope_run_with(run_id, async move {
+                    let mut lines = BufReader::new(stderr).lines();
+                    let mut line_count: u64 = 0;
+                    while let Ok(Some(line)) = lines.next_line().await {
+                        let _ = ch_err.send(SyncEvent::LogLine {
+                            line,
+                            stream: "stderr".to_string(),
+                        });
+                        line_count += 1;
+                    }
+                    // D-01 per-completion count summary (this drain's lines).
+                    if log::log_enabled!(log::Level::Debug) {
+                        crate::utils::log::debug!(
+                            "git drain complete stream=stderr lines={}",
+                            line_count
+                        );
+                    }
+                    // D-05 (Phase 12 / HOTUI-12): git-pull stderr per-completion
+                    // counter summary — ONE line per drain per run.
+                    if log::log_enabled!(log::Level::Debug) {
+                        crate::utils::log::debug!(
+                            "ipc.channel drain complete stream=stderr sent_total={}",
+                            ch_err.count()
+                        );
+                    }
+                })
+                .await;
+            })
+            .await
+            {
+                let msg = crate::utils::log::panic_payload_as_str(&payload);
+                warn!("[drain] panic caught stream=stderr msg={}", msg);
             }
         });
 
@@ -471,40 +532,84 @@ impl GitService {
         let stderr = child.stderr.take().unwrap();
 
         let ch_out = channel.clone();
+        // Phase 12 / D-02: capture RUN_ID before spawn.
+        let run_id = RUN_ID.try_with(|r| r.clone()).ok();
         let stdout_task = tokio::spawn(async move {
-            let mut lines = BufReader::new(stdout).lines();
-            while let Ok(Some(line)) = lines.next_line().await {
-                let _ = ch_out.send(SyncEvent::LogLine {
-                    line,
-                    stream: "stdout".to_string(),
-                });
-            }
-            // D-05 (Phase 12 / HOTUI-12): genProject stdout per-completion
-            // counter summary — ONE line per drain per run.
-            if log::log_enabled!(log::Level::Debug) {
-                crate::utils::log::debug!(
-                    "ipc.channel drain complete stream=stdout sent_total={}",
-                    ch_out.count()
-                );
+            // Phase 12 / D-09: catch_unwind_future wrap (see git pull stdout_task).
+            if let Err(payload) = crate::utils::log::catch_unwind_future(async move {
+                scope_run_with(run_id, async move {
+                    let mut lines = BufReader::new(stdout).lines();
+                    let mut line_count: u64 = 0;
+                    while let Ok(Some(line)) = lines.next_line().await {
+                        let _ = ch_out.send(SyncEvent::LogLine {
+                            line,
+                            stream: "stdout".to_string(),
+                        });
+                        line_count += 1;
+                    }
+                    // D-01 per-completion count summary (this drain's lines).
+                    if log::log_enabled!(log::Level::Debug) {
+                        crate::utils::log::debug!(
+                            "genProject drain complete stream=stdout lines={}",
+                            line_count
+                        );
+                    }
+                    // D-05 (Phase 12 / HOTUI-12): genProject stdout per-completion
+                    // counter summary — ONE line per drain per run.
+                    if log::log_enabled!(log::Level::Debug) {
+                        crate::utils::log::debug!(
+                            "ipc.channel drain complete stream=stdout sent_total={}",
+                            ch_out.count()
+                        );
+                    }
+                })
+                .await;
+            })
+            .await
+            {
+                let msg = crate::utils::log::panic_payload_as_str(&payload);
+                warn!("[drain] panic caught stream=stdout msg={}", msg);
             }
         });
 
         let ch_err = channel.clone();
+        // Phase 12 / D-02: capture RUN_ID before spawn.
+        let run_id = RUN_ID.try_with(|r| r.clone()).ok();
         let stderr_task = tokio::spawn(async move {
-            let mut lines = BufReader::new(stderr).lines();
-            while let Ok(Some(line)) = lines.next_line().await {
-                let _ = ch_err.send(SyncEvent::LogLine {
-                    line,
-                    stream: "stderr".to_string(),
-                });
-            }
-            // D-05 (Phase 12 / HOTUI-12): genProject stderr per-completion
-            // counter summary — ONE line per drain per run.
-            if log::log_enabled!(log::Level::Debug) {
-                crate::utils::log::debug!(
-                    "ipc.channel drain complete stream=stderr sent_total={}",
-                    ch_err.count()
-                );
+            // Phase 12 / D-09: catch_unwind_future wrap.
+            if let Err(payload) = crate::utils::log::catch_unwind_future(async move {
+                scope_run_with(run_id, async move {
+                    let mut lines = BufReader::new(stderr).lines();
+                    let mut line_count: u64 = 0;
+                    while let Ok(Some(line)) = lines.next_line().await {
+                        let _ = ch_err.send(SyncEvent::LogLine {
+                            line,
+                            stream: "stderr".to_string(),
+                        });
+                        line_count += 1;
+                    }
+                    // D-01 per-completion count summary (this drain's lines).
+                    if log::log_enabled!(log::Level::Debug) {
+                        crate::utils::log::debug!(
+                            "genProject drain complete stream=stderr lines={}",
+                            line_count
+                        );
+                    }
+                    // D-05 (Phase 12 / HOTUI-12): genProject stderr per-completion
+                    // counter summary — ONE line per drain per run.
+                    if log::log_enabled!(log::Level::Debug) {
+                        crate::utils::log::debug!(
+                            "ipc.channel drain complete stream=stderr sent_total={}",
+                            ch_err.count()
+                        );
+                    }
+                })
+                .await;
+            })
+            .await
+            {
+                let msg = crate::utils::log::panic_payload_as_str(&payload);
+                warn!("[drain] panic caught stream=stderr msg={}", msg);
             }
         });
 
