@@ -45,6 +45,25 @@ export function RunningPanel({
     (currentStep as string) === "forceSync" ||
     p4SyncOverrun;
 
+  // Derive the indeterminate "what step" label. forceSync is NOT a member of the
+  // SyncStep union (detected via `(currentStep as string) === "forceSync"`), and
+  // stepDescriptions values can be null — so handle both. Only compute when
+  // indeterminate (keeps determinate renders identical + avoids needless string work).
+  const indeterminateLabel = isIndeterminate
+    ? currentStep === "genProject"
+      ? (stepDescriptions.genProject ?? "Generating project files…")
+      : (currentStep as string) === "forceSync"
+        ? "Force-syncing…"
+        : p4SyncOverrun
+          ? `${progress.total}+ files…`
+          : undefined
+    : undefined;
+
+  // Live liveness line = latest log line. Consumed ONLY in JSX (pure render-time),
+  // so a new log line triggers a normal re-render but does NOT enter the diagnostic
+  // effect below (its deps are unchanged). O(1)-ish; no memoization needed.
+  const lastLog = logLines.length > 0 ? logLines[logLines.length - 1] : undefined;
+
   // Log ONLY on state TRANSITION (on→off / off→on) to avoid flooding the file
   // (p4SyncOverrun depends on progress.current/total which tick hundreds of
   // times per second during a big sync). One diagnostic line per flip.
@@ -99,6 +118,8 @@ export function RunningPanel({
         total={progress.total}
         currentFile={progress.currentFile}
         indeterminate={isIndeterminate}
+        indeterminateLabel={indeterminateLabel}
+        indeterminateDetail={isIndeterminate ? lastLog : undefined}
       />
       <div className="flex-1 overflow-hidden border-t border-border mt-2">
         <LogViewer lines={logLines} />
