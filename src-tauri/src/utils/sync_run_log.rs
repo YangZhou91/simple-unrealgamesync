@@ -2,13 +2,13 @@
 //!
 //! During a real `p4 sync`, each matched file line is appended to a per-run
 //! file `sync-<run_id>.log` in the app log dir, formatted as
-//! `{current}/{total} {redacted_raw_line}`. This gives the operator a
-//! persistent, 1:1-correlated per-file record they can cross-reference
-//! against the frontend progress bar AFTER a sync (the in-memory LogViewer is
-//! lost on WebView suspension and the main `p4-updater.log` is deliberately
-//! count-only per the Phase 12 anti-flood decision T-12-DR-1).
+//! `{current}/{total} {raw_line}`. This gives the operator a persistent,
+//! 1:1-correlated per-file record they can cross-reference against the
+//! frontend progress bar AFTER a sync (the in-memory LogViewer is lost on
+//! WebView suspension and the main `p4-updater.log` is deliberately count-only
+//! per the Phase 12 anti-flood decision T-12-DR-1).
 //!
-//! Design guarantees (mirrors redact.rs / commands/log.rs rationale):
+//! Design guarantees:
 //! - **SEPARATE sink, never `p4-updater.log`** — writing per-file lines to the
 //!   main rotating log (KeepSome(5) × 5MB) would flood rotation and reverse
 //!   T-12-DR-1. The per-run file is its own sink; the main log is untouched.
@@ -16,12 +16,17 @@
 //!   sync NEVER fails because the per-run file couldn't be written (the drain
 //!   task must not stall on a broken file handle either — on error the writer
 //!   latches to `None` so subsequent calls are a cheap no-op, no retry).
-//! - **Redact-mandatory** — `format_sync_file_line` routes EVERY raw p4 line
-//!   through `crate::utils::redact::redact` BEFORE formatting. The Phase 10
-//!   audited boundary (D-05) is reused; no raw depot/local path or username is
-//!   ever persisted. `total` is printed verbatim — it is NEVER used as a
-//!   divisor (the dry-run estimate may be 0 or an undercount); the format is
-//!   purely display.
+//! - **RAW by design (local-diagnosis only)** — the file paths ARE the
+//!   correlation payload, so `format_sync_file_line` writes each p4 line
+//!   VERBATIM (no redaction). The file therefore contains depot paths, local
+//!   filesystem paths, and the operator's username. It is intended for
+//!   on-machine diagnosis only — DO NOT distribute it or attach it to bug
+//!   reports. A `redact()` pass was tried first but its static catalog no-ops
+//!   on this project's `//FY_Depot/...` depot and `D:\FYDepot\...` roots, and
+//!   the username is glued to a `_` (`Art_Stream_UGS_zhouyang`) so the `\b`
+//!   anchor never matches — verified in quick-260630-srw Task 3, decision A.
+//!   `total` is printed verbatim — it is NEVER used as a divisor (the dry-run
+//!   estimate may be 0 or an undercount); the format is purely display.
 //! - **Retention** — `prune_sync_run_logs` keeps the `SYNC_RUN_LOG_KEEP` most
 //!   recent `sync-*.log` files (by mtime) and is invoked once per run at
 //!   `SyncRunFileWriter::open` time, so the log dir cannot grow unbounded.
@@ -30,26 +35,24 @@ use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::path::Path;
 
-use crate::utils::redact::redact;
-
 /// Number of `sync-*.log` files to retain when pruning at open time.
 /// Small constant per the constraint (operator-owned log dir; older
 /// correlation logs are low-value once a newer run lands).
 pub const SYNC_RUN_LOG_KEEP: usize = 3;
 
-/// Format one synced-file line as `{current}/{total} {redacted}` (no trailing
+/// Format one synced-file line as `{current}/{total} {raw}` (no trailing
 /// newline — the caller's `writeln!` adds it, or `write_line` does).
 ///
-/// `raw` is routed through `crate::utils::redact::redact` BEFORE formatting
-/// (redact-mandatory — no raw path/username is ever persisted). `total` is
-/// printed verbatim; it is NEVER used as a divisor (the dry-run estimate may
-/// be 0 or an undercount), so `total=0` cannot panic.
+/// The raw p4 line is written VERBATIM — the file paths are the correlation
+/// payload (see the module-level RAW-by-design note: this file is local-
+/// diagnosis only and must not be distributed). `total` is printed verbatim;
+/// it is NEVER used as a divisor (the dry-run estimate may be 0 or an
+/// undercount), so `total=0` cannot panic.
 pub fn format_sync_file_line(current: u64, total: u64, raw: &str) -> String {
     // Trim any trailing newline defensively — p4 stdout lines have none, but
     // a future caller might pass a multi-line buffer; one logical line per
     // write keeps the 1:1 correlation with the progress counter intact.
-    let redacted = redact(raw);
-    let trimmed = redacted.trim_end_matches(['\n', '\r']);
+    let trimmed = raw.trim_end_matches(['\n', '\r']);
     format!("{current}/{total} {trimmed}")
 }
 
@@ -94,9 +97,9 @@ impl SyncRunFileWriter {
         Self { writer: None }
     }
 
-    /// Append one `{current}/{total} {redacted}\n` line. Best-effort: on any
-    /// io error the inner writer latches to `None` (no retry on a broken
-    /// handle — the drain must not stall). A no-op once latched.
+    /// Append one `{current}/{total} {raw}\n` line. Best-effort: on any io
+    /// error the inner writer latches to `None` (no retry on a broken handle
+    /// — the drain must not stall). A no-op once latched.
     pub fn write_line(&mut self, current: u64, total: u64, raw: &str) {
         let Some(w) = self.writer.as_mut() else {
             return;
@@ -201,25 +204,19 @@ mod tests {
         }
     }
 
-    // ---- format_sync_file_line: redaction + format ----
+    // ---- format_sync_file_line: RAW retention + format ----
 
     #[test]
-    fn format_line_redacts_users_home_path() {
-        // A Users-prefix path the static catalog catches deterministically
-        // regardless of the host's %USERNAME%: C:\Users\alice\... -> <PATH>\...
-        let out = format_sync_file_line(5, 100, r"C:\Users\alice\workspaces\FYGame\Foo.uasset");
-        assert!(
-            out.contains("<PATH>"),
-            "expected <PATH> token in {out:?}"
-        );
-        assert!(
-            !out.contains("alice"),
-            "raw username must not survive in {out:?}"
-        );
-        assert!(
-            out.starts_with("5/100 "),
-            "expected '5/100 ' prefix in {out:?}"
-        );
+    fn format_line_retains_raw_path_verbatim() {
+        // RAW-by-design (decision A): the file path is the correlation payload,
+        // so it must survive verbatim — NO <PATH>/<USER>/<DEPOT> masking. The
+        // `{current}/{total} ` prefix carries the progress counter for 1:1
+        // correlation with the frontend progress bar.
+        let raw = r"C:\Users\alice\workspaces\FYGame\Foo.uasset";
+        let out = format_sync_file_line(5, 100, raw);
+        assert!(out.starts_with("5/100 "), "expected '5/100 ' prefix in {out:?}");
+        assert!(out.contains(raw), "raw path must be retained verbatim in {out:?}");
+        assert!(!out.contains('<'), "no redaction tokens expected in {out:?}");
     }
 
     #[test]
@@ -240,12 +237,12 @@ mod tests {
             out.starts_with("5/0 "),
             "expected '5/0 ' prefix for total=0 in {out:?}"
         );
-        assert!(out.contains("<PATH>"));
     }
 
     #[test]
     fn format_line_preserves_non_path_content() {
-        // A clean business line: no redaction fires, the body survives intact.
+        // A clean business line: the body survives intact (RAW-by-design —
+        // nothing is masked).
         let out = format_sync_file_line(3, 7, "no secrets here");
         assert_eq!(out, "3/7 no secrets here");
     }
@@ -297,12 +294,13 @@ mod tests {
             fs::read_to_string(dir.join("sync-run1.log")).expect("read per-run file");
         let lines: Vec<&str> = content.lines().collect();
         assert_eq!(lines.len(), 2, "expected 2 lines, got {lines:?}");
-        // Each line: {current}/{total} {redacted}. Username masked via <PATH>.
+        // Each line: {current}/{total} {raw} — raw path retained verbatim
+        // (RAW-by-design, decision A).
         assert!(lines[0].starts_with("1/4 "), "line 0 prefix: {}", lines[0]);
         assert!(lines[1].starts_with("2/4 "), "line 1 prefix: {}", lines[1]);
         assert!(
-            !content.contains("alice"),
-            "raw username must not be persisted: {content:?}"
+            content.contains("alice"),
+            "raw path must be retained verbatim (RAW-by-design): {content:?}"
         );
         cleanup(&dir);
     }
