@@ -28,3 +28,4 @@ regex = "1"
 chrono = { version = "0.4", features = ["clock"] }
 tokio-util = { version = "0.7", features = ["rt"] }
 uuid = { version = "1", features = ["v4"] }
+sysinfo = "0.32"

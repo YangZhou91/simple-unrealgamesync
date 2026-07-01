@@ -5,3 +5,4 @@ pub mod process_manager;
 pub mod sync_orchestrator;
 pub mod tray_manager;
 pub mod workspace;
+pub mod disk_usage_sampler;
