@@ -20,7 +20,7 @@ export interface P4BehindInfo {
 export type SyncEvent =
   | { event: "stepStarted"; data: { step: string; description: string } }
   | { event: "stepCompleted"; data: { step: string; success: boolean } }
-  | { event: "progress"; data: { current: number; total: number; currentFile: string } }
+  | { event: "progress"; data: { current: number; total: number; currentFile: string; bytesDone?: number | null; bytesTotal?: number | null; bytesRate?: number | null } }
   | { event: "logLine"; data: { line: string; stream: string } }
   /** Batched log lines — reduces IPC call count from ~226K individual sends to ~1130
    *  batch sends for a typical 226K-file sync. Frontend appends all lines at once. */

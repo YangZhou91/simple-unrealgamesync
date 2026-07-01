@@ -9,7 +9,16 @@ import { useEffect, useRef } from "react";
 
 interface RunningPanelProps {
   stepStatuses: Record<SyncStep, StepStatus>;
-  progress: { current: number; total: number; currentFile: string };
+  progress: {
+    current: number;
+    total: number;
+    currentFile: string;
+    // quick-260701-ep7: optional byte-level signal threaded from useSync →
+    // ProgressSection. null when the heartbeat is not emitting bytes.
+    bytesDone?: number | null;
+    bytesTotal?: number | null;
+    bytesRate?: number | null;
+  };
   logLines: string[];
   currentStep: SyncStep | null;
   stepDescriptions: Record<SyncStep, string | null>;
@@ -120,6 +129,13 @@ export function RunningPanel({
         indeterminate={isIndeterminate}
         indeterminateLabel={indeterminateLabel}
         indeterminateDetail={isIndeterminate ? lastLog : undefined}
+        // quick-260701-ep7: thread byte signal to ProgressSection. `?? undefined`
+        // collapses null (typical non-heartbeat value) to "prop absent" so the
+        // optional-prop defaults take over. Consumed ONLY in JSX render-time
+        // (like lastLog) — does NOT enter the diagnostic effect's dep array.
+        bytesDone={progress.bytesDone ?? undefined}
+        bytesTotal={progress.bytesTotal ?? undefined}
+        bytesRate={progress.bytesRate ?? undefined}
       />
       <div className="flex-1 overflow-hidden border-t border-border mt-2">
         <LogViewer lines={logLines} />

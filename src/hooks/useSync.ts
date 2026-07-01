@@ -31,10 +31,20 @@ export function useSync(onSyncComplete?: (cl: string | null) => void) {
     p4Sync: null,
     genProject: null,
   });
-  const [progress, setProgress] = useState({
+  const [progress, setProgress] = useState<{
+    current: number;
+    total: number;
+    currentFile: string;
+    bytesDone: number | null;
+    bytesTotal: number | null;
+    bytesRate: number | null;
+  }>({
     current: 0,
     total: 0,
     currentFile: "",
+    bytesDone: null,
+    bytesTotal: null,
+    bytesRate: null,
   });
   const [logLines, setLogLines] = useState<string[]>([]);
   const logBufferRef = useRef<string[]>([]);
@@ -97,7 +107,14 @@ export function useSync(onSyncComplete?: (cl: string | null) => void) {
       p4Sync: null,
       genProject: null,
     });
-    setProgress({ current: 0, total: 0, currentFile: "" });
+    setProgress({
+      current: 0,
+      total: 0,
+      currentFile: "",
+      bytesDone: null,
+      bytesTotal: null,
+      bytesRate: null,
+    });
     stopFlushTimer();
   }, [stopFlushTimer]);
 
@@ -190,6 +207,9 @@ export function useSync(onSyncComplete?: (cl: string | null) => void) {
             current: event.data.current,
             total: event.data.total,
             currentFile: event.data.currentFile,
+            bytesDone: event.data.bytesDone ?? null,
+            bytesTotal: event.data.bytesTotal ?? null,
+            bytesRate: event.data.bytesRate ?? null,
           });
           break;
         case "logLine":
@@ -258,7 +278,14 @@ export function useSync(onSyncComplete?: (cl: string | null) => void) {
       logBufferRef.current = [];
       setLogLines([]);
       setErrorInfo(null);
-      setProgress({ current: 0, total: 0, currentFile: "" });
+      setProgress({
+        current: 0,
+        total: 0,
+        currentFile: "",
+        bytesDone: null,
+        bytesTotal: null,
+        bytesRate: null,
+      });
       setStepStatuses(initialStatuses);
       startFlushTimer();
       try {
