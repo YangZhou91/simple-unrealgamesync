@@ -757,6 +757,9 @@ impl SyncOrchestrator {
             current: 0,
             total: 0,
             current_file: "Enumerating files...".to_string(),
+            bytes_done: None,
+            bytes_total: None,
+            bytes_rate: None,
         });
 
         // Run dry_run first to get total file count BEFORE starting sync
@@ -788,6 +791,20 @@ impl SyncOrchestrator {
             return Err(AppError::Cancelled);
         }
 
+        // quick-260701-ep7: best-effort `p4 sync -N` denominator for the
+        // byte-level progress bar. Runs AFTER the -n count (which we already
+        // awaited) and NEVER gates the real sync: sync_n_total_bytes wraps the
+        // call in a 60s timeout and maps ALL failures to None, so the worst
+        // case is a 60s wait yielding a rate-only bar. T-ep7-02 / T-ep7-03.
+        // The parse outcome is logged at info inside the helper (the empirical-
+        // validation log for the denominator).
+        let bytes_total: Option<u64> = self.p4.sync_n_total_bytes(workspace, options).await;
+        if bytes_total.is_some() {
+            info!("[sync-N] denominator available — byte-level bar will show percentage");
+        } else {
+            info!("[sync-N] no denominator — byte bar will be rate-only (liveness proof)");
+        }
+
         // quick-260630-srw: resolve the app log dir ONCE and thread it into
         // the primary + force syncs so each matched file is appended to a
         // per-run file sync-<run_id>.log in this dir. Best-effort: if the
@@ -805,6 +822,7 @@ impl SyncOrchestrator {
                 total.clone(),
                 Some(self.process_manager.clone()),
                 sync_log_dir.clone(),
+                bytes_total,
             )
             .await;
 
@@ -820,6 +838,9 @@ impl SyncOrchestrator {
                 current: actual_count,
                 total: clamped_total,
                 current_file: String::new(),
+                bytes_done: None,
+                bytes_total: None,
+                bytes_rate: None,
             });
         }
 

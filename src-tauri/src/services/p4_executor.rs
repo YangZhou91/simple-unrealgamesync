@@ -1,5 +1,6 @@
 use crate::error::AppError;
 use crate::models::{ChangelistEntry, SyncEvent, WorkspaceConfig};
+use crate::services::disk_usage_sampler::DiskUsageSampler;
 use crate::services::process_manager::ProcessManager;
 use crate::utils::counting_channel::CountingChannel;
 use crate::utils::log::{render_cancelled_line, render_exited_line, render_spawned_line, scope_run_with, RUN_ID, StepScope};
@@ -7,7 +8,7 @@ use std::path::Path;
 use std::process::Stdio;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-use tauri_plugin_log::log::{info, warn};
+use tauri_plugin_log::log::{debug, info, warn};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
 use tokio::sync::Mutex;
@@ -316,6 +317,87 @@ pub fn build_force_sync_args() -> Vec<String> {
     ]
 }
 
+/// Defensive parser for `p4 sync -N` total transfer bytes (quick-260701-ep7).
+/// T-ep7-03: the -N output format is NOT hardcoded — the workspace is often
+/// 0-behind so it cannot be pre-tested. This scans stdout line-by-line for a
+/// number immediately followed by (or adjacent to) a unit hint and scales it
+/// to bytes. ANY uncertainty → None. No `unwrap`/`expect`.
+///
+/// Recognized shapes per line (the number may be a float, may have thousands
+/// separators — commas are stripped before coercion):
+///   `1234567 bytes` / `1.2 GB` / `450.5 MB` / `1234 kB` / `2345 K` / `1.5G`
+///
+/// The FIRST matching line wins (Perforce typically emits the transfer total
+/// on a summary line). Returns None if no line carries a numeric+unit shape.
+pub fn parse_sync_n_total_bytes(stdout: &str) -> Option<u64> {
+    for line in stdout.lines() {
+        if let Some(bytes) = parse_first_byte_amount(line) {
+            return Some(bytes);
+        }
+    }
+    None
+}
+
+/// Scan a single line for the first `<number> <unit>` shape and return the
+/// scaled byte count. `unit` is matched case-insensitively and may be glued to
+/// the number (`1.5G`) or separated by whitespace (`1.5 GB`).
+fn parse_first_byte_amount(line: &str) -> Option<u64> {
+    let lower = line.to_ascii_lowercase();
+    // Walk the lowercased line, scanning for a numeric run followed (possibly
+    // after whitespace) by a unit hint. We tokenize manually to avoid pulling
+    // a regex dependency for a single defensive scan.
+    let bytes_str = lower.as_bytes();
+    let mut i = 0;
+    while i < bytes_str.len() {
+        let c = bytes_str[i];
+        if c.is_ascii_digit() || c == b'.' {
+            // Capture the numeric run starting at i.
+            let start = i;
+            while i < bytes_str.len()
+                && (bytes_str[i].is_ascii_digit()
+                    || bytes_str[i] == b'.'
+                    || bytes_str[i] == b',')
+            {
+                i += 1;
+            }
+            let raw = &lower[start..i];
+            // Strip thousands separators before float coercion.
+            let cleaned = raw.replace(',', "");
+            let value: f64 = cleaned.parse().ok()?;
+            // Skip whitespace between number and unit.
+            let mut j = i;
+            while j < bytes_str.len() && bytes_str[j].is_ascii_whitespace() {
+                j += 1;
+            }
+            // Read the unit prefix (b/k/m/g/t). We match the FIRST letter at j;
+            // the following 'b' (bytes) is optional for k/m/g/t.
+            if j < bytes_str.len() {
+                let unit_letter = bytes_str[j];
+                let scale: Option<f64> = match unit_letter {
+                    b'b' => Some(1.0),
+                    b'k' => Some(1_024.0),
+                    b'm' => Some(1_024f64 * 1_024.0),
+                    b'g' => Some(1_024f64 * 1_024.0 * 1_024.0),
+                    b't' => Some(1_024f64 * 1_024.0 * 1_024.0 * 1_024.0),
+                    _ => None,
+                };
+                if let Some(s) = scale {
+                    let bytes = value * s;
+                    if bytes.is_finite() && bytes >= 0.0 {
+                        // Saturating cast — avoids overflow panic on absurd values.
+                        return Some(bytes.min(u64::MAX as f64) as u64);
+                    }
+                }
+            }
+            // No unit on this number — continue scanning the rest of the line.
+            // (i already advanced past the number.)
+        } else {
+            i += 1;
+        }
+    }
+    None
+}
+
 struct ActiveBehindCheck {
     id: u64,
     token: CancellationToken,
@@ -478,10 +560,12 @@ impl P4Executor {
         Ok(None)
     }
 
-    #[allow(clippy::too_many_arguments)] // 8 args: sync_log_dir added by
-    // quick-260630-srw; grouping into a builder would be disproportionate for
-    // a quick task (the existing drain args are already coupled to the p4
-    // spawn + IPC channel + cancellation trio).
+    #[allow(clippy::too_many_arguments)] // 9 args: sync_log_dir added by
+    // quick-260630-srw; bytes_total added by quick-260701-ep7 (best-effort
+    // `p4 sync -N` denominator threaded from the orchestrator's dry-run phase).
+    // Grouping into a builder would be disproportionate for a quick task (the
+    // existing drain args are already coupled to the p4 spawn + IPC channel +
+    // cancellation trio).
     pub async fn sync(
         &self,
         workspace: &WorkspaceConfig,
@@ -491,6 +575,7 @@ impl P4Executor {
         total: Arc<AtomicU64>,
         process_manager: Option<Arc<ProcessManager>>,
         sync_log_dir: Option<std::path::PathBuf>,
+        bytes_total: Option<u64>,
     ) -> Result<u64, AppError> {
         // Validate target_cl if provided
         if let Some(ref cl) = options.target_cl {
@@ -529,7 +614,13 @@ impl P4Executor {
 
         // Track the p4 process PID so stop_all can kill it via taskkill
         let spawn_start = std::time::Instant::now();
-        if let (Some(ref pm), Some(id)) = (&process_manager, child.id()) {
+        // quick-260701-ep7: capture the p4 child PID ONCE here (before
+        // stdout/stderr take — child.id() is still valid per the plan's
+        // plan-checker verification) so the heartbeat can poll the child's
+        // disk_usage via DiskUsageSampler. None only if id() is unavailable
+        // (the heartbeat falls back to count-only Progress in that case).
+        let child_pid: Option<u32> = child.id();
+        if let (Some(ref pm), Some(id)) = (&process_manager, child_pid) {
             pm.track_pid(id).await;
         }
 
@@ -665,6 +756,9 @@ impl P4Executor {
                                 current,
                                 total: total_reader.load(Ordering::Relaxed),
                                 current_file,
+                                bytes_done: None,
+                                bytes_total: None,
+                                bytes_rate: None,
                             });
                         }
                     }
@@ -785,7 +879,7 @@ impl P4Executor {
             }
         });
 
-        // Heartbeat task: sends progress events every 5 seconds when no file progress
+        // Heartbeat task: sends progress events every 2 seconds when no file progress
         // This prevents the UI from appearing "stuck" during large file transfers
         let ch_heartbeat = channel.clone();
         let fc_heartbeat = file_count.clone();
@@ -793,28 +887,76 @@ impl P4Executor {
         // Phase 12 / D-02: capture RUN_ID before the heartbeat spawn so the
         // Plan 12-01 counter line carries [run=<id>].
         let run_id = RUN_ID.try_with(|r| r.clone()).ok();
+        // quick-260701-ep7: capture the `bytes_total` denominator (best-effort
+        // `p4 sync -N` parse from the orchestrator's dry-run phase) so the
+        // heartbeat can emit it on every tick when the sampler is live. This
+        // is a one-shot value — clone the Option once into the closure.
+        let bytes_total_hb = bytes_total;
         let heartbeat_task = tokio::spawn(async move {
             scope_run_with(run_id, async move {
-                let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(5));
+                // quick-260701-ep7: construct the DiskUsageSampler ONCE
+                // (outside the tick loop). The sampler is PID-scoped — it
+                // refreshes ONLY the p4 child pid on each sample. None when
+                // child_pid was unavailable at spawn (count-only fallback).
+                let mut sampler = child_pid.map(DiskUsageSampler::new);
+                // quick-260701-ep7: tighten heartbeat interval from 5s to ~2s
+                // so the byte-level bar updates at a usable cadence.
+                let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(2));
                 loop {
                     interval.tick().await;
                     let current = fc_heartbeat.load(Ordering::Relaxed);
                     let total = total_heartbeat.load(Ordering::Relaxed);
+                    // quick-260701-ep7: poll the p4 child's disk activity. When
+                    // the sampler yields a sample (pid live), emit the byte
+                    // signal (bytesDone = accumulated, bytesRate = per-sec
+                    // rate, bytesTotal = the -N denominator). When the sampler
+                    // returns None (pid gone) or there is no sampler, emit
+                    // None for the byte fields — the frontend falls back to
+                    // the count-based bar (ADDITIVE — current/total/currentFile
+                    // are always sent).
+                    let (bytes_done, bytes_rate) = if let Some(ref mut s) = sampler {
+                        match s.sample() {
+                            Some(sampled) => {
+                                // INSTRUMENTATION (quick-260701-ep7): the byte
+                                // signal cannot be runtime-pre-verified without
+                                // a real sync — this per-tick debug log is the
+                                // empirical-validation evidence. The next real
+                                // p4 sync's log MUST show non-zero delta/accumulated/rate
+                                // during the transfer tail.
+                                if log::log_enabled!(log::Level::Debug) {
+                                    debug!(
+                                        "disk_usage pid={} delta={}B accumulated={}B rate={}B/s",
+                                        child_pid.unwrap_or(0),
+                                        sampled.delta_bytes,
+                                        sampled.accumulated_bytes,
+                                        sampled.rate_bytes_per_sec
+                                    );
+                                }
+                                (Some(sampled.accumulated_bytes), Some(sampled.rate_bytes_per_sec))
+                            }
+                            None => (None, None),
+                        }
+                    } else {
+                        (None, None)
+                    };
                     // Send heartbeat to show the sync is still alive
                     let _ = ch_heartbeat.send(SyncEvent::Progress {
                         current,
                         total,
                         current_file: String::new(),
+                        bytes_done,
+                        bytes_total: bytes_total_hb,
+                        bytes_rate,
                     });
                     // D-05 (Phase 12 / HOTUI-12): sample the IPC-channel send counter
-                    // on every 5s tick — ONE line per tick (O(seconds-per-sync), NOT
+                    // on every 2s tick — ONE line per tick (O(seconds-per-sync), NOT
                     // per-event). `ch_heartbeat` is a CountingChannel clone, so its
                     // `.count()` reads the Arc-shared total incremented by every
                     // stdout/stderr/heartbeat/orchestrator `.send()`. The
                     // `log_enabled!(Debug)` guard is MANDATORY (HOTUI-13 eager-eval
                     // rule: the `format!` cost is skipped when Debug is compiled out).
                     if log::log_enabled!(log::Level::Debug) {
-                        crate::utils::log::debug!(
+                        debug!(
                             "ipc.channel sent total={}",
                             ch_heartbeat.count()
                         );
@@ -1243,6 +1385,70 @@ impl P4Executor {
                 Err(AppError::Cancelled)
             }
         }
+    }
+
+    /// Best-effort `p4 sync -N` denominator for the byte-level progress bar
+    /// (quick-260701-ep7). `p4 sync -N` is the "network preview" / summary
+    /// form that reports the transfer size Perforce would pull. The format is
+    /// NOT hardcoded (the workspace is often 0-behind so it cannot be
+    /// pre-tested) — parsing is DEFENSIVE: any uncertainty (command error,
+    /// timeout, unparseable output) yields `None`, and sync proceeds with a
+    /// rate-only bar.
+    ///
+    /// T-ep7-02 / T-ep7-03: the entire call is wrapped in a 60s
+    /// `tokio::time::timeout`; ALL errors (spawn, timeout, parse, status)
+    /// map to `None`. The parse scans stdout for a numeric token adjacent to
+    /// a unit hint (bytes/KB/MB/GB/k/M/G) and scales; no `unwrap`/`expect` on
+    /// parsed values.
+    ///
+    /// This MUST NOT block the real sync — callers run it concurrently with /
+    /// after the `-n` count and pass `Option<u64>` into `sync()`.
+    pub async fn sync_n_total_bytes(
+        &self,
+        workspace: &WorkspaceConfig,
+        options: &SyncOptions,
+    ) -> Option<u64> {
+        // Build the SAME args the real sync uses (depot paths / CL / parallel),
+        // then insert -N (network summary) after "sync" — mirrors dry_run_sync's
+        // -n insertion shape.
+        let args = build_p4_sync_args(
+            options,
+            &workspace.root_path,
+            &workspace.project_dir,
+            &options.target_cl,
+        );
+        let mut full_args = args.clone();
+        full_args.insert(1, "-N".to_string());
+        let args_refs: Vec<&str> = full_args.iter().map(|s| s.as_str()).collect();
+
+        // T-ep7-02: 60s timeout — any failure below short-circuits to None via
+        // the catch-all match at the bottom.
+        let output = tokio::time::timeout(
+            std::time::Duration::from_secs(60),
+            async {
+                let mut cmd = self.build_p4_command(workspace, &args_refs);
+                // stdout piped + stderr null — we only parse the summary line.
+                cmd.stdout(Stdio::piped()).stderr(Stdio::null());
+                output_with_retry(&mut cmd).await
+            },
+        )
+        .await
+        .ok()?
+        .ok()?;
+
+        if !output.status.success() {
+            info!("[sync-N] non-success status, bytes_total=None");
+            return None;
+        }
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let parsed = parse_sync_n_total_bytes(&stdout);
+        // T-ep7-03: log the parse outcome — this is the empirical-validation
+        // log for the denominator. Some(v) = parse succeeded; None = -N output
+        // did not match the expected shape (workspace may be 0-behind or the
+        // format differs).
+        info!("[sync-N] bytes_total parsed: {:?}", parsed);
+        parsed
     }
 
     pub async fn get_changelists(

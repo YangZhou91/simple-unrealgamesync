@@ -20,6 +20,13 @@ pub enum SyncEvent {
         current: u64,
         total: u64,
         current_file: String,
+        // quick-260701-ep7: optional byte-level signal. ADDITIVE — serialized
+        // as bytesDone/bytesTotal/bytesRate via the enum's rename_all_fields=
+        // camelCase. None for every non-heartbeat emit; the p4Sync heartbeat
+        // fills them from DiskUsageSampler + the `p4 sync -N` denominator.
+        bytes_done: Option<u64>,
+        bytes_total: Option<u64>,
+        bytes_rate: Option<u64>,
     },
     LogLine {
         line: String,
@@ -77,11 +84,17 @@ impl std::fmt::Debug for SyncEvent {
                 current,
                 total,
                 current_file: _,
+                bytes_done,
+                bytes_total,
+                bytes_rate,
             } => f
                 .debug_struct("Progress")
                 .field("current", &current)
                 .field("total", &total)
                 .field("current_file", &"<redacted>")
+                .field("bytes_done", &bytes_done)
+                .field("bytes_total", &bytes_total)
+                .field("bytes_rate", &bytes_rate)
                 .finish(),
             SyncEvent::LogLine { line: _, stream } => f
                 .debug_struct("LogLine")
@@ -131,6 +144,9 @@ mod tests {
             current: 1,
             total: 10,
             current_file: r"C:\Users\alice\FYGame\Content\Maps\Foo.uasset".into(),
+            bytes_done: None,
+            bytes_total: None,
+            bytes_rate: None,
         };
         let log_line = SyncEvent::LogLine {
             line: "secret alice line".into(),
