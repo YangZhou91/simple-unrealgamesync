@@ -318,57 +318,88 @@ pub fn build_force_sync_args() -> Vec<String> {
 }
 
 /// Defensive parser for the `p4 sync -N` total transfer bytes (quick-260701-ep7,
-/// rewritten quick-260706-ow2). The real `-N` summary is a single line of the
-/// shape `Server network estimates: files added/updated/deleted=X/Y/Z, bytes
-/// added/updated=D/E`. This fn extracts the two byte literals `D` and `E` from
-/// the literal marker `bytes added/updated=` and returns `Some(D+E)`.
+/// rewritten quick-260706-ow2, multi-line summation quick-260706-pvk). The real
+/// `-N` summary is one line per depot subpath of the shape `Server network
+/// estimates: files added/updated/deleted=X/Y/Z, bytes added/updated=D/E`.
+///
+/// The app's real `p4 sync -N` invocation (built by `build_p4_sync_args`) passes
+/// ~47 depot subpaths, so stdout contains ~47 `bytes added/updated=` markers —
+/// one per subpath. The first several markers are usually the leading subpaths'
+/// `0/0` estimates (already-in-sync subpaths). This fn SUMS `D+E` across ALL
+/// markers; previously it read only the FIRST segment via `.nth(1)`, which on a
+/// real multi-path sync is the first subpath's `0/0` → the whole parse yielded
+/// `None` and the byte bar denominator vanished.
+///
+/// For each marker segment after the literal `bytes added/updated=`, the fn
+/// reads the leading `<digits>/<digits>` as `D` and `E`. A segment that does
+/// NOT match that shape (empty digit run, missing `/`, or `.parse()` failure)
+/// is SKIPPED (`continue`) — the parse is resilient to stray text between
+/// markers and never aborts on a single bad segment.
 ///
 /// Returns `None` if:
-///   - the literal marker `bytes added/updated=` is absent,
-///   - the two integers don't parse as `u64`,
-///   - the checked sum overflows, or
-///   - the sum is `0` (a 0-byte total is NEVER a usable denominator — this is
-///     the core bug fix: the old parser glued onto the deleted-files count `Z`
-///     stuck to the `b` in `, bytes` and returned `Some(Z)`, which for a normal
-///     sync is `Some(0)` and makes the frontend abandon the byte bar).
+///   - no well-formed segment contributes bytes (i.e. no marker is present, or
+///     every segment is malformed), or
+///   - any per-segment `D+E` or the running total overflows `u64` (`checked_add`
+///     semantics), or
+///   - the running sum is `0` (a 0-byte total is NEVER a usable denominator —
+///     this is the core ow2 bug fix: the old parser glued onto the deleted-files
+///     count `Z` stuck to the `b` in `, bytes` and returned `Some(Z)`, which for
+///     a normal sync is `Some(0)` and makes the frontend abandon the byte bar).
 pub fn parse_sync_n_total_bytes(stdout: &str) -> Option<u64> {
     const MARKER: &str = "bytes added/updated=";
-    let after = stdout.split(MARKER).nth(1)?;
-    let bytes = after.as_bytes();
 
-    // Read the first ASCII-digit run as D (must be non-empty).
-    let mut i = 0;
-    let d_start = i;
-    while i < bytes.len() && bytes[i].is_ascii_digit() {
+    // Split on the marker. Element 0 is the text BEFORE the first marker (skip
+    // it via `.skip(1)`); every remaining element is the text immediately
+    // following one `bytes added/updated=` marker.
+    let mut total: u64 = 0;
+    for segment in stdout.split(MARKER).skip(1) {
+        let bytes = segment.as_bytes();
+
+        // Read the first ASCII-digit run as D (must be non-empty).
+        let mut i = 0;
+        let d_start = i;
+        while i < bytes.len() && bytes[i].is_ascii_digit() {
+            i += 1;
+        }
+        if i == d_start {
+            continue; // malformed segment — skip, do NOT abort
+        }
+        let d: u64 = match segment[d_start..i].parse::<u64>().ok() {
+            Some(v) => v,
+            None => continue,
+        };
+
+        // Require a single '/' separator.
+        if i >= bytes.len() || bytes[i] != b'/' {
+            continue;
+        }
         i += 1;
-    }
-    if i == d_start {
-        return None;
-    }
-    let d: u64 = after[d_start..i].parse().ok()?;
 
-    // Require a single '/' separator.
-    if i >= bytes.len() || bytes[i] != b'/' {
-        return None;
-    }
-    i += 1;
+        // Read the second ASCII-digit run as E (must be non-empty).
+        let e_start = i;
+        while i < bytes.len() && bytes[i].is_ascii_digit() {
+            i += 1;
+        }
+        if i == e_start {
+            continue;
+        }
+        let e: u64 = match segment[e_start..i].parse::<u64>().ok() {
+            Some(v) => v,
+            None => continue,
+        };
 
-    // Read the second ASCII-digit run as E (must be non-empty).
-    let e_start = i;
-    while i < bytes.len() && bytes[i].is_ascii_digit() {
-        i += 1;
+        // Per-segment D+E with overflow check.
+        let segment_sum = d.checked_add(e)?;
+        // Running total with overflow check.
+        total = total.checked_add(segment_sum)?;
     }
-    if i == e_start {
-        return None;
-    }
-    let e: u64 = after[e_start..i].parse().ok()?;
 
-    // Sum with overflow check; a 0-byte total is never a usable denominator.
-    let sum = d.checked_add(e)?;
-    if sum == 0 {
-        return None;
+    // A 0-byte total is never a usable denominator (preserved ow2 contract).
+    if total == 0 {
+        None
+    } else {
+        Some(total)
     }
-    Some(sum)
 }
 
 struct ActiveBehindCheck {
@@ -1650,6 +1681,51 @@ mod tests {
     #[test]
     fn test_parse_sync_n_total_bytes_empty_is_none() {
         assert_eq!(None, parse_sync_n_total_bytes(""));
+    }
+
+    // --- Multi-line tests for parse_sync_n_total_bytes (quick-260706-pvk) ---
+
+    #[test]
+    fn test_parse_sync_n_total_bytes_multi_path_sums_all() {
+        // The app's real `p4 sync -N` (built by build_p4_sync_args) passes ~47
+        // depot subpaths → ~47 `bytes added/updated=` markers, one per subpath.
+        // The first several are usually `0/0` (already-in-sync subpaths). The
+        // parser must SUM D+E across ALL non-zero markers, not bail on the first
+        // `0/0` segment. Exact sum: 38275900 + 359115 + 42792 = 38677807.
+        let stdout = "\
+Server network estimates: files added/updated/deleted=0/0/0, bytes added/updated=0/0
+Server network estimates: files added/updated/deleted=0/0/0, bytes added/updated=0/0
+Server network estimates: files added/updated/deleted=0/0/0, bytes added/updated=0/38275900
+Server network estimates: files added/updated/deleted=0/0/0, bytes added/updated=0/359115
+Server network estimates: files added/updated/deleted=0/0/0, bytes added/updated=0/42792
+";
+        assert_eq!(Some(38677807), parse_sync_n_total_bytes(stdout));
+    }
+
+    #[test]
+    fn test_parse_sync_n_total_bytes_all_zero_multi_line() {
+        // Several `0/0` markers across multiple lines → running sum stays 0 →
+        // None (a 0-byte total is NEVER a usable denominator — preserved ow2
+        // contract, now applied to the multi-line sum).
+        let stdout = "\
+Server network estimates: files added/updated/deleted=0/0/0, bytes added/updated=0/0
+Server network estimates: files added/updated/deleted=0/0/0, bytes added/updated=0/0
+Server network estimates: files added/updated/deleted=0/0/0, bytes added/updated=0/0
+";
+        assert_eq!(None, parse_sync_n_total_bytes(stdout));
+    }
+
+    #[test]
+    fn test_parse_sync_n_total_bytes_skips_malformed_segment() {
+        // A segment that doesn't match `<digits>/<digits>` must be SKIPPED
+        // (continue), not abort the whole parse. Here the first marker segment
+        // is malformed (non-digit runs `abc/def`); the second is a well-formed
+        // `0/1000` → the parse yields Some(1000).
+        let stdout = "\
+Server network estimates: files added/updated/deleted=0/0/0, bytes added/updated=abc/def
+Server network estimates: files added/updated/deleted=0/0/0, bytes added/updated=0/1000
+";
+        assert_eq!(Some(1000), parse_sync_n_total_bytes(stdout));
     }
 
     // --- New tests for SyncOptions and arg-builder functions ---
