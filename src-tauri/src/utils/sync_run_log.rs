@@ -5,11 +5,11 @@
 //! `{current}/{total} {raw_line}`. This gives the operator a persistent,
 //! 1:1-correlated per-file record they can cross-reference against the
 //! frontend progress bar AFTER a sync (the in-memory LogViewer is lost on
-//! WebView suspension and the main `p4-updater.log` is deliberately count-only
+//! WebView suspension and the main `simple-unrealgamesync.log` is deliberately count-only
 //! per the Phase 12 anti-flood decision T-12-DR-1).
 //!
 //! Design guarantees:
-//! - **SEPARATE sink, never `p4-updater.log`** — writing per-file lines to the
+//! - **SEPARATE sink, never `simple-unrealgamesync.log`** — writing per-file lines to the
 //!   main rotating log (KeepSome(5) × 5MB) would flood rotation and reverse
 //!   T-12-DR-1. The per-run file is its own sink; the main log is untouched.
 //! - **Best-effort, non-fatal** — every operation swallows `io::Error`s. A
@@ -364,13 +364,13 @@ mod tests {
     fn prune_on_dir_with_no_sync_logs_is_noop() {
         let dir = unique_temp_dir("prune_empty");
         // Add a non-matching file so the dir is non-empty but has no sync-*.log.
-        fs::write(dir.join("p4-updater.log"), b"x").unwrap();
+        fs::write(dir.join("simple-unrealgamesync.log"), b"x").unwrap();
         fs::write(dir.join("other.txt"), b"x").unwrap();
 
         prune_sync_run_logs(&dir, 3);
 
         // Non-matching files survive untouched.
-        assert!(dir.join("p4-updater.log").exists(), "non-matching file must survive");
+        assert!(dir.join("simple-unrealgamesync.log").exists(), "non-matching file must survive");
         assert!(dir.join("other.txt").exists(), "non-matching file must survive");
         cleanup(&dir);
     }

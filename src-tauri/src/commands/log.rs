@@ -43,9 +43,9 @@ use std::os::windows::process::CommandExt as _;
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 
 /// The on-disk log file name produced by `build_logger_plugin`
-/// (`utils/log.rs:452` — `TargetKind::LogDir { file_name: Some("p4-updater".into()) }`).
+/// (`utils/log.rs:452` — `TargetKind::LogDir { file_name: Some("simple-unrealgamesync".into()) }`).
 /// The plugin appends the `.log` extension automatically.
-const LOG_FILE_NAME: &str = "p4-updater.log";
+const LOG_FILE_NAME: &str = "simple-unrealgamesync.log";
 
 /// Resolve the current log file path at runtime via the platform `LogDir`.
 ///

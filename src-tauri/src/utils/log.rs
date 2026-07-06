@@ -5,7 +5,7 @@
 //! default single-file rotation wiped pre-incident evidence in every open
 //! debug brief) and replaces it with a purpose-built plugin:
 //!
-//! - file target at `%LOCALAPPDATA%\com.simpleugs.app\logs\p4-updater.log`
+//! - file target at `%LOCALAPPDATA%\com.simpleugs.app\logs\simple-unrealgamesync.log`
 //!   carrying the uniform line layout `<ts> <LEVEL> <module>: [run=——] <msg>`
 //!   with a reserved `[run=——]` slot (D-02) that Phase 11 swaps for the
 //!   `task_local! RUN_ID`;
@@ -546,7 +546,7 @@ pub fn build_logger_plugin<R: Runtime>() -> TauriPlugin<R> {
     };
 
     let file_target = Target::new(TargetKind::LogDir {
-        file_name: Some("p4-updater".into()),
+        file_name: Some("simple-unrealgamesync".into()),
     })
     .format(file_formatter);
 
