@@ -2,6 +2,22 @@
 
 All notable changes to Simple UnrealGameSync will be documented in this file.
 
+## [1.4.0] - 2026-07-06
+
+### Added
+- **Byte-level sync progress bar**: Real bytes-transferred (via sysinfo `disk_usage()` on the p4 child process) plus a `p4 sync -N` byte denominator drive a progress bar that stays live through the ~6 min silent transfer tail where the file-count bar froze at 100%. File count is shown as a secondary line; bytes and count converge only at 100%.
+- **Diagnostic logging stack**: Persistent debug-level file logging (`simple-unrealgamesync.log`, KeepSome(5) + 5 MB rotation, release panic hook with backtrace), a redaction net (paths / P4PORT / emails / depot paths masked before instrumentation), RUN_ID correlation across command/process/step boundaries, and sampled hot-path counters — freeze/stuck bugs in shipped builds are now diagnosable without remote telemetry.
+- **In-app log affordances**: "Open logs folder" and "Export log" in Settings.
+- **Per-run sync file log**: Each synced file is appended 1:1 with the progress bar to `sync-<run_id>.log` (retained N=3) for post-sync forensics.
+- **Workspace p4 stream/client** displayed in the idle/running panel header.
+
+### Changed
+- On-disk log file renamed `p4-updater.log` → `simple-unrealgamesync.log` to match the product name.
+
+### Fixed
+- **WorkspaceConfig serde**: 6 snake_case fields (`rootPath`/`p4Client`/etc.) were `undefined` on the frontend, producing an empty "Client:" line — now correctly camelCase with snake_case aliases (migration-safe).
+- Indeterminate "Working…" bar liveness during the long progress-less force-sync/genProject steps.
+
 ## [0.4.0] - 2026-06-12
 
 ### Added
