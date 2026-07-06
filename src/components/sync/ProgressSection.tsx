@@ -100,6 +100,11 @@ export function ProgressSection({
           {currentFile}
         </span>
       )}
+      {showByteBar && (
+        <span className="text-xs text-muted font-mono truncate">
+          {fileText}
+        </span>
+      )}
       {indeterminate && indeterminateDetail && (
         <span className="text-xs text-muted font-mono truncate">
           {indeterminateDetail}
