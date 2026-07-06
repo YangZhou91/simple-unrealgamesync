@@ -317,85 +317,58 @@ pub fn build_force_sync_args() -> Vec<String> {
     ]
 }
 
-/// Defensive parser for `p4 sync -N` total transfer bytes (quick-260701-ep7).
-/// T-ep7-03: the -N output format is NOT hardcoded — the workspace is often
-/// 0-behind so it cannot be pre-tested. This scans stdout line-by-line for a
-/// number immediately followed by (or adjacent to) a unit hint and scales it
-/// to bytes. ANY uncertainty → None. No `unwrap`/`expect`.
+/// Defensive parser for the `p4 sync -N` total transfer bytes (quick-260701-ep7,
+/// rewritten quick-260706-ow2). The real `-N` summary is a single line of the
+/// shape `Server network estimates: files added/updated/deleted=X/Y/Z, bytes
+/// added/updated=D/E`. This fn extracts the two byte literals `D` and `E` from
+/// the literal marker `bytes added/updated=` and returns `Some(D+E)`.
 ///
-/// Recognized shapes per line (the number may be a float, may have thousands
-/// separators — commas are stripped before coercion):
-///   `1234567 bytes` / `1.2 GB` / `450.5 MB` / `1234 kB` / `2345 K` / `1.5G`
-///
-/// The FIRST matching line wins (Perforce typically emits the transfer total
-/// on a summary line). Returns None if no line carries a numeric+unit shape.
+/// Returns `None` if:
+///   - the literal marker `bytes added/updated=` is absent,
+///   - the two integers don't parse as `u64`,
+///   - the checked sum overflows, or
+///   - the sum is `0` (a 0-byte total is NEVER a usable denominator — this is
+///     the core bug fix: the old parser glued onto the deleted-files count `Z`
+///     stuck to the `b` in `, bytes` and returned `Some(Z)`, which for a normal
+///     sync is `Some(0)` and makes the frontend abandon the byte bar).
 pub fn parse_sync_n_total_bytes(stdout: &str) -> Option<u64> {
-    for line in stdout.lines() {
-        if let Some(bytes) = parse_first_byte_amount(line) {
-            return Some(bytes);
-        }
-    }
-    None
-}
+    const MARKER: &str = "bytes added/updated=";
+    let after = stdout.split(MARKER).nth(1)?;
+    let bytes = after.as_bytes();
 
-/// Scan a single line for the first `<number> <unit>` shape and return the
-/// scaled byte count. `unit` is matched case-insensitively and may be glued to
-/// the number (`1.5G`) or separated by whitespace (`1.5 GB`).
-fn parse_first_byte_amount(line: &str) -> Option<u64> {
-    let lower = line.to_ascii_lowercase();
-    // Walk the lowercased line, scanning for a numeric run followed (possibly
-    // after whitespace) by a unit hint. We tokenize manually to avoid pulling
-    // a regex dependency for a single defensive scan.
-    let bytes_str = lower.as_bytes();
+    // Read the first ASCII-digit run as D (must be non-empty).
     let mut i = 0;
-    while i < bytes_str.len() {
-        let c = bytes_str[i];
-        if c.is_ascii_digit() || c == b'.' {
-            // Capture the numeric run starting at i.
-            let start = i;
-            while i < bytes_str.len()
-                && (bytes_str[i].is_ascii_digit()
-                    || bytes_str[i] == b'.'
-                    || bytes_str[i] == b',')
-            {
-                i += 1;
-            }
-            let raw = &lower[start..i];
-            // Strip thousands separators before float coercion.
-            let cleaned = raw.replace(',', "");
-            let value: f64 = cleaned.parse().ok()?;
-            // Skip whitespace between number and unit.
-            let mut j = i;
-            while j < bytes_str.len() && bytes_str[j].is_ascii_whitespace() {
-                j += 1;
-            }
-            // Read the unit prefix (b/k/m/g/t). We match the FIRST letter at j;
-            // the following 'b' (bytes) is optional for k/m/g/t.
-            if j < bytes_str.len() {
-                let unit_letter = bytes_str[j];
-                let scale: Option<f64> = match unit_letter {
-                    b'b' => Some(1.0),
-                    b'k' => Some(1_024.0),
-                    b'm' => Some(1_024f64 * 1_024.0),
-                    b'g' => Some(1_024f64 * 1_024.0 * 1_024.0),
-                    b't' => Some(1_024f64 * 1_024.0 * 1_024.0 * 1_024.0),
-                    _ => None,
-                };
-                if let Some(s) = scale {
-                    let bytes = value * s;
-                    if bytes.is_finite() && bytes >= 0.0 {
-                        // Saturating cast — avoids overflow panic on absurd values.
-                        return Some(bytes.min(u64::MAX as f64) as u64);
-                    }
-                }
-            }
-            // No unit on this number — continue scanning the rest of the line.
-            // (i already advanced past the number.)
-        } else {
-            i += 1;
-        }
+    let d_start = i;
+    while i < bytes.len() && bytes[i].is_ascii_digit() {
+        i += 1;
     }
-    None
+    if i == d_start {
+        return None;
+    }
+    let d: u64 = after[d_start..i].parse().ok()?;
+
+    // Require a single '/' separator.
+    if i >= bytes.len() || bytes[i] != b'/' {
+        return None;
+    }
+    i += 1;
+
+    // Read the second ASCII-digit run as E (must be non-empty).
+    let e_start = i;
+    while i < bytes.len() && bytes[i].is_ascii_digit() {
+        i += 1;
+    }
+    if i == e_start {
+        return None;
+    }
+    let e: u64 = after[e_start..i].parse().ok()?;
+
+    // Sum with overflow check; a 0-byte total is never a usable denominator.
+    let sum = d.checked_add(e)?;
+    if sum == 0 {
+        return None;
+    }
+    Some(sum)
 }
 
 struct ActiveBehindCheck {
@@ -1640,6 +1613,43 @@ mod tests {
     #[test]
     fn test_parse_sync_file_info_line() {
         assert_eq!(0, parse_sync_file_count("... file(s) up-to-date."));
+    }
+
+    // --- Tests for parse_sync_n_total_bytes (quick-260706-ow2) ---
+
+    #[test]
+    fn test_parse_sync_n_total_bytes_single_file() {
+        let stdout =
+            "Server network estimates: files added/updated/deleted=0/1/0, bytes added/updated=0/54761";
+        assert_eq!(Some(54761), parse_sync_n_total_bytes(stdout));
+    }
+
+    #[test]
+    fn test_parse_sync_n_total_bytes_large() {
+        // D + E = 12345 + 4300000000 = 4300012345 (exercises u64 + non-trivial D).
+        let stdout = "Server network estimates: files added/updated/deleted=120/164000/0, bytes added/updated=12345/4300000000";
+        assert_eq!(Some(4300012345), parse_sync_n_total_bytes(stdout));
+    }
+
+    #[test]
+    fn test_parse_sync_n_total_bytes_zero_behind_is_none() {
+        // 0-behind: D=E=0 → sum is 0 → None (never a usable denominator; this
+        // is the core bug fix — the old parser returned Some(0) via the deleted
+        // count Z glued to ", bytes").
+        let stdout =
+            "Server network estimates: files added/updated/deleted=0/0/0, bytes added/updated=0/0";
+        assert_eq!(None, parse_sync_n_total_bytes(stdout));
+    }
+
+    #[test]
+    fn test_parse_sync_n_total_bytes_missing_literal_is_none() {
+        let stdout = "some other p4 output";
+        assert_eq!(None, parse_sync_n_total_bytes(stdout));
+    }
+
+    #[test]
+    fn test_parse_sync_n_total_bytes_empty_is_none() {
+        assert_eq!(None, parse_sync_n_total_bytes(""));
     }
 
     // --- New tests for SyncOptions and arg-builder functions ---
