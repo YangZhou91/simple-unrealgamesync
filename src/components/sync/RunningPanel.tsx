@@ -51,6 +51,12 @@ export function RunningPanel({
   //   - Running genProject / forceSync (no file progress for these steps)
   //   - p4Sync has consumed all files the dry-run estimated but is still going
   //     (dry-run can undercount when new CLs land between preview and actual sync)
+  // quick-260707-t93: when a byte signal is live, the overrun must NOT
+  // flip indeterminate — it would hide the byte bar (ProgressSection render
+  // priority is indeterminate > showByteBar). Fall back to the "{total}+
+  // files…" indeterminate only when the sampler hasn't produced a byte
+  // sample yet (sampler broken / first sample pending).
+  const hasByteSignal = (progress.bytesDone ?? 0) > 0;
   const p4SyncOverrun =
     currentStep === "p4Sync" &&
     progress.total > 0 &&
@@ -58,7 +64,7 @@ export function RunningPanel({
   const isIndeterminate =
     currentStep === "genProject" ||
     (currentStep as string) === "forceSync" ||
-    p4SyncOverrun;
+    (p4SyncOverrun && !hasByteSignal);
 
   // Derive the indeterminate "what step" label. forceSync is NOT a member of the
   // SyncStep union (detected via `(currentStep as string) === "forceSync"`), and

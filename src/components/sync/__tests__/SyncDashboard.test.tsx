@@ -265,3 +265,103 @@ describe("RunningPanel prep state", () => {
     expect(screen.getByText(/GB|MB/)).toBeDefined();
   });
 });
+
+// quick-260707-t93: p4SyncOverrun must NOT flip indeterminate when a byte
+// signal is live — otherwise the byte bar gets hidden during the post-overrun
+// tail (p4 stdout is front-loaded, so count overruns ~13s in while bytes are
+// still actively being written for ~5m44s).
+describe("RunningPanel p4SyncOverrun byte-bar priority", () => {
+  const baseProps = {
+    stepStatuses: {
+      closeUe: "pending" as const,
+      cleanDevDir: "pending" as const,
+      p4Sync: "pending" as const,
+      genProject: "pending" as const,
+    },
+    logLines: [] as string[],
+    currentStep: null as SyncStep | null,
+    errorInfo: null as { step: string; error: string } | null,
+    lastSyncResult: null as { cl: string | null; fileCount: number; time: string } | null,
+    selectedWorkspace: null as WorkspaceConfig | null,
+    targetCl: "",
+    onTargetClChange: (_cl: string) => {},
+    stepDescriptions: {
+      closeUe: null as string | null,
+      cleanDevDir: null as string | null,
+      p4Sync: null as string | null,
+      genProject: null as string | null,
+    },
+    onStartSync: () => {},
+    onStopSync: () => {},
+    onRetryStep: (_step: string) => {},
+    onDismissError: () => {},
+    onRollback: () => {},
+    historyRecords: [] as HistoryRecord[],
+    historyLoading: false,
+    historyRollingBack: false,
+    gitState: "idle" as const,
+    gitLogLines: [] as string[],
+    gitErrorInfo: null as { error: string } | null,
+    onGitPull: () => {},
+    onStopGitPull: () => {},
+    onDismissGitResult: () => {},
+    gitBranchInfo: null as GitBranchInfo | null,
+    gitBranchLoading: false,
+    behindInfo: null,
+    behindLoading: false,
+  };
+
+  it("Test D: byte bar stays visible when count overruns AND byte signal is live", () => {
+    // Spread-from-variable avoids TS excess-property checks on the byte fields
+    // (SyncDashboard.progress is narrowly typed {current,total,currentFile}).
+    const progress = {
+      current: 13660,
+      total: 13657,
+      currentFile: "",
+      bytesDone: 1_454_433_303,
+      bytesTotal: 36_600_000_000,
+      bytesRate: 76_327_744,
+    };
+    render(
+      <SyncDashboard
+        {...baseProps}
+        syncState="running"
+        currentStep="p4Sync"
+        progress={progress}
+      />,
+    );
+    // Byte-formatted main line present as the PRIMARY line (ProgressSection
+    // formatBytes renders "X.X GB / Y.Y GB · Z.Z MB/s" in the text-foreground
+    // main span). The secondary muted span renders fileText; the primary span
+    // must be the byte bar, not the indeterminate "13657+ files…" label.
+    const primaryLine = screen.getByText(/\d+\.\d+ GB \/ \d+\.\d+ GB/);
+    expect(primaryLine).toBeDefined();
+    expect(primaryLine.className).toContain("text-foreground");
+    expect(primaryLine.className).not.toContain("text-xs");
+    // Sanity: when count overruns, fileText is "13657+ files…" and renders as
+    // the SECONDARY muted line under the byte bar (showByteBar branch). That
+    // secondary line is intentional UI, NOT the indeterminate label.
+    expect(primaryLine.textContent).not.toMatch(/13657\+ files/);
+  });
+
+  it("Test E: falls back to indeterminate overrun label when count overruns with no byte signal", () => {
+    const progress = {
+      current: 13660,
+      total: 13657,
+      currentFile: "",
+      bytesDone: null,
+      bytesTotal: null,
+      bytesRate: null,
+    };
+    render(
+      <SyncDashboard
+        {...baseProps}
+        syncState="running"
+        currentStep="p4Sync"
+        progress={progress}
+      />,
+    );
+    // Legacy "{total}+ files…" indeterminate fallback preserved.
+    expect(screen.getByText(/13657\+ files/)).toBeDefined();
+  });
+});
