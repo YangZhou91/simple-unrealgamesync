@@ -168,5 +168,100 @@ describe("SyncDashboard", () => {
       />,
     );
     expect(screen.getByText("Cancel Sync")).toBeDefined();
+    // quick-260707-kdf: prep must NOT leak into the null-step / non-p4Sync path.
+    expect(screen.queryByText(/正在准备/)).toBeNull();
+  });
+});
+
+// quick-260707-kdf: prep state — indeterminate bar + "正在准备… 将更新 N 个文件"
+// between p4Sync start and the first byte sample (or the 20s fallback).
+describe("RunningPanel prep state", () => {
+  const baseProps = {
+    stepStatuses: {
+      closeUe: "pending" as const,
+      cleanDevDir: "pending" as const,
+      p4Sync: "pending" as const,
+      genProject: "pending" as const,
+    },
+    logLines: [] as string[],
+    currentStep: null as SyncStep | null,
+    errorInfo: null as { step: string; error: string } | null,
+    lastSyncResult: null as { cl: string | null; fileCount: number; time: string } | null,
+    selectedWorkspace: null as WorkspaceConfig | null,
+    targetCl: "",
+    onTargetClChange: (_cl: string) => {},
+    stepDescriptions: {
+      closeUe: null as string | null,
+      cleanDevDir: null as string | null,
+      p4Sync: null as string | null,
+      genProject: null as string | null,
+    },
+    onStartSync: () => {},
+    onStopSync: () => {},
+    onRetryStep: (_step: string) => {},
+    onDismissError: () => {},
+    onRollback: () => {},
+    historyRecords: [] as HistoryRecord[],
+    historyLoading: false,
+    historyRollingBack: false,
+    gitState: "idle" as const,
+    gitLogLines: [] as string[],
+    gitErrorInfo: null as { error: string } | null,
+    onGitPull: () => {},
+    onStopGitPull: () => {},
+    onDismissGitResult: () => {},
+    gitBranchInfo: null as GitBranchInfo | null,
+    gitBranchLoading: false,
+    behindInfo: null,
+    behindLoading: false,
+  };
+
+  it("Test A: shows prep label during p4Sync with no byte signal (under 20s)", () => {
+    // Spread-from-variable avoids TS excess-property checks on the byte fields
+    // (SyncDashboard.progress is narrowly typed {current,total,currentFile};
+    // App.tsx passes a wider object at runtime — structural typing admits it).
+    const progress = {
+      current: 50000,
+      total: 164038,
+      currentFile: "//FY_Depot/FYGame/Content/SomeFile.uasset",
+      bytesDone: null,
+      bytesTotal: null,
+      bytesRate: null,
+    };
+    render(
+      <SyncDashboard
+        {...baseProps}
+        syncState="running"
+        currentStep="p4Sync"
+        progress={progress}
+      />,
+    );
+    // Prep label present (with the total file count interpolated).
+    expect(screen.getByText(/正在准备.*164038/)).toBeDefined();
+    // Count-bar main line NOT rendered as the primary line.
+    expect(screen.queryByText("50000/164038 files")).toBeNull();
+  });
+
+  it("Test C: byte bar takes priority over prep when byte signal arrives", () => {
+    const progress = {
+      current: 50000,
+      total: 164038,
+      currentFile: "",
+      bytesDone: 300_000_000,
+      bytesTotal: 4_000_000_000,
+      bytesRate: 45_000_000,
+    };
+    render(
+      <SyncDashboard
+        {...baseProps}
+        syncState="running"
+        currentStep="p4Sync"
+        progress={progress}
+      />,
+    );
+    // Prep cleared by the byte signal.
+    expect(screen.queryByText(/正在准备/)).toBeNull();
+    // Byte-formatted main line present (GB scale — exact text owned by formatBytes).
+    expect(screen.getByText(/GB|MB/)).toBeDefined();
   });
 });
