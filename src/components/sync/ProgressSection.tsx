@@ -19,6 +19,14 @@ interface ProgressSectionProps {
   bytesDone?: number | null;
   bytesTotal?: number | null;
   bytesRate?: number | null;
+  // quick-260707-kdf: prep state — shown between "p4Sync started" and the
+  // first byte sample (or the 20s fallback). When true, the bar is
+  // indeterminate and the main line shows `prepLabel` (e.g.
+  // "正在准备… 将更新 164038 个文件"). Highest-priority render branch;
+  // RunningPanel guarantees `prep` is only set when `!isIndeterminate`, so it
+  // never collides with the genProject/forceSync/overrun indeterminate path.
+  prep?: boolean;
+  prepLabel?: string;
 }
 
 /** Pure byte-amount formatter (GB/MB/KB auto-scale, 1 decimal). quick-260701-ep7. */
@@ -39,6 +47,8 @@ export function ProgressSection({
   bytesDone = null,
   bytesTotal = null,
   bytesRate = null,
+  prep = false,
+  prepLabel,
 }: ProgressSectionProps) {
   // When current exceeds the dry-run estimate (new CLs arrived mid-sync),
   // show "N+ files…" instead of "N/N files" so the user knows it's still running.
@@ -78,21 +88,25 @@ export function ProgressSection({
   return (
     <div className="flex flex-col gap-1.5 px-6 py-2">
       <span className="text-sm text-foreground">
-        {indeterminate
-          ? (indeterminateLabel ?? "Working…")
-          : showByteBar
-            ? byteText
-            : fileText}
+        {prep
+          ? (prepLabel ?? "正在准备…")
+          : indeterminate
+            ? (indeterminateLabel ?? "Working…")
+            : showByteBar
+              ? byteText
+              : fileText}
       </span>
       <Progress
         value={
-          indeterminate
+          prep
             ? undefined
-            : showByteBar
-              ? (bytePct ?? pct)
-              : pct
+            : indeterminate
+              ? undefined
+              : showByteBar
+                ? (bytePct ?? pct)
+                : pct
         }
-        indeterminate={indeterminate}
+        indeterminate={prep || indeterminate}
         className="h-2"
       />
       {currentFile && (
