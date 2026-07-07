@@ -1446,6 +1446,13 @@ impl P4Executor {
         }
 
         let stdout = String::from_utf8_lossy(&output.stdout);
+        // Diagnostic: log the RAW `-N` stdout so the per-subpath `Server network
+        // estimates:` lines are visible. Used to diagnose denominator anomalies
+        // (e.g. a Revision/@CL sync parsing as ~1TB vs ~36GB for HEAD on the same
+        // workspace — needs the raw lines to tell a p4 estimate quirk from a
+        // parser double-count). Debug level only — the stdout can be ~3-5KB across
+        // ~47 subpaths; never want this at info.
+        debug!("[sync-N] raw stdout ({} bytes): {}", stdout.len(), stdout);
         let parsed = parse_sync_n_total_bytes(&stdout);
         // T-ep7-03: log the parse outcome — this is the empirical-validation
         // log for the denominator. Some(v) = parse succeeded; None = -N output
