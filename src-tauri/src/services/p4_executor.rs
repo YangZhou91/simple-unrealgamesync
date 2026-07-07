@@ -262,6 +262,20 @@ pub fn resolve_non_excluded_paths(
                             }
                         }
                     } else {
+                        // Skip the project dir itself — already covered
+                        // granularly above as
+                        // UnrealEngine/<project_dir>/<child>/... . A catch-all
+                        // here re-covers the same files; p4 sync dedupes
+                        // overlapping paths at transfer time, but `p4 sync -N`
+                        // estimates each path independently → the project's
+                        // byte estimate gets counted twice in the denominator
+                        // (saw ~959.7 GB phantom bytes on a Revision/@CL
+                        // sync — bogus byte-bar denominator; quick-260707-s1y).
+                        // Other UE sibling subdirs (FeaturePacks, etc.) still
+                        // get their catch-all — the guard is targeted.
+                        if ue_name == project_dir {
+                            continue;
+                        }
                         paths.push(format!("UnrealEngine/{}/...", ue_name));
                     }
                 }
@@ -1888,6 +1902,87 @@ Server network estimates: files added/updated/deleted=0/0/0, bytes added/updated
         assert!(!paths.iter().any(|p| p.contains("Developers")));
         assert!(!paths.iter().any(|p| p.contains("TestData")));
         assert!(paths.iter().any(|p| p.contains("Content/Audio")));
+
+        let _ = fs::remove_dir_all(&tmp_dir);
+    }
+
+    // --- Test for project catch-all overlap fix (quick-260707-s1y) ---
+    //
+    // Reproduces the real Revision(@CL) layout that triggered the bug: the
+    // project lives UNDER `UnrealEngine/<project_dir>/`, so when the
+    // workspace_root_scope loop iterates `UnrealEngine/` children, the project
+    // dir is one of them and would otherwise get a catch-all
+    // `UnrealEngine/<project_dir>/...` RE-COVERING files already enumerated
+    // granularly in the first loop (`UnrealEngine/<project_dir>/<child>/...`).
+    // `p4 sync -N` estimates each path independently → double-count → bogus
+    // ~959.7 GB denominator observed in run 4fd03ef1.
+    //
+    // The fix skips the catch-all ONLY when `ue_name == project_dir`. Sibling
+    // UE subdirs (FeaturePacks below) MUST still get their catch-all — that
+    // assertion proves the guard is targeted, not over-broad.
+    #[test]
+    fn test_resolve_non_excluded_paths_skips_project_catchall() {
+        let tmp_dir = std::env::temp_dir().join("p4_test_project_catchall_overlap");
+        let ue_dir = tmp_dir.join("UnrealEngine");
+        // Project lives UNDER UnrealEngine/ — the real layout that exposes the
+        // overlap. project_candidates resolves to `UnrealEngine/FYGame`.
+        let project_dir = ue_dir.join("FYGame");
+        let _ = fs::remove_dir_all(&tmp_dir);
+        // Project's own children — must be enumerated granularly by the first
+        // loop as `UnrealEngine/FYGame/<child>/...`.
+        fs::create_dir_all(project_dir.join("Content")).unwrap();
+        fs::create_dir_all(project_dir.join("Build")).unwrap();
+        fs::create_dir_all(project_dir.join("Config")).unwrap();
+        // Engine child — must be enumerated by the Engine branch.
+        fs::create_dir_all(ue_dir.join("Engine/Config")).unwrap();
+        // A UE sibling that is NOT the project — must get its catch-all.
+        fs::create_dir_all(ue_dir.join("FeaturePacks")).unwrap();
+
+        let paths = resolve_non_excluded_paths(
+            tmp_dir.to_str().unwrap(),
+            "FYGame",
+            &[],
+            true, // workspace_root_scope=true exercises the CL branch directly
+        );
+
+        // (A) Granular project children ARE present — proves the project is
+        // resolved granularly by the first loop.
+        assert!(
+            paths.iter().any(|p| p == "UnrealEngine/FYGame/Content/..."),
+            "granular project child Content must be present; got {:?}",
+            paths
+        );
+        assert!(
+            paths.iter().any(|p| p == "UnrealEngine/FYGame/Build/..."),
+            "granular project child Build must be present; got {:?}",
+            paths
+        );
+
+        // (B) CORE: the project-dir catch-all is ABSENT — exact-match (NOT
+        // .contains("FYGame"), which would match the legitimate granular
+        // children like `UnrealEngine/FYGame/Content/...`). This is the
+        // phantom-bytes line that contributed ~959.7 GB to the -N denominator.
+        assert!(
+            !paths.iter().any(|p| p == "UnrealEngine/FYGame/..."),
+            "project-dir catch-all must be absent (would double-count in -N); got {:?}",
+            paths
+        );
+
+        // (C) A sibling UE subdir catch-all IS present — proves the guard
+        // skips ONLY the project dir, not all UE siblings. This is the
+        // assertion that proves the guard is targeted.
+        assert!(
+            paths.iter().any(|p| p == "UnrealEngine/FeaturePacks/..."),
+            "sibling UE subdir catch-all must be present; got {:?}",
+            paths
+        );
+
+        // (D) Engine enumeration still works.
+        assert!(
+            paths.iter().any(|p| p == "UnrealEngine/Engine/Config/..."),
+            "Engine child enumeration must work; got {:?}",
+            paths
+        );
 
         let _ = fs::remove_dir_all(&tmp_dir);
     }
