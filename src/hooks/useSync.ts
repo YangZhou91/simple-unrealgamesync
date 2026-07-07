@@ -7,6 +7,7 @@ import type {
   StepStatus,
 } from "@/lib/types";
 import * as commands from "@/lib/commands";
+import { mergeProgress } from "@/hooks/mergeProgress";
 
 type StepStatuses = Record<SyncStep, StepStatus>;
 
@@ -203,14 +204,16 @@ export function useSync(onSyncComplete?: (cl: string | null) => void) {
           }));
           break;
         case "progress":
-          setProgress({
-            current: event.data.current,
-            total: event.data.total,
-            currentFile: event.data.currentFile,
-            bytesDone: event.data.bytesDone ?? null,
-            bytesTotal: event.data.bytesTotal ?? null,
-            bytesRate: event.data.bytesRate ?? null,
-          });
+          // quick-260707-pf9: sticky-merge byte fields. The backend emits two
+          // interleaved Progress streams — a high-freq stdout drain (~5/s,
+          // byte fields null) and a low-freq heartbeat (~0.5/s, byte fields
+          // sampled). Whole-object-overwrite let the drain clobber the
+          // heartbeat byte signal ~90% of the time, flickering the byte bar.
+          // mergeProgress preserves prev.bytes* when the event omits them,
+          // while always taking current/total/currentFile from the event.
+          // Functional setProgress((prev) => ...) is required so prev is the
+          // latest state across the rapid drain/heartbeat interleaving.
+          setProgress((prev) => mergeProgress(prev, event.data));
           break;
         case "logLine":
           logBufferRef.current.push(event.data.line);
