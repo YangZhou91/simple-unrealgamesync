@@ -151,4 +151,94 @@ describe("mergeProgress", () => {
     expect(result.current).toBe(11);
     expect(result.currentFile).toBe("b.uasset");
   });
+
+  // Regression (quick-260707-s1y): p4 `--parallel=4` bursts writes; the
+  // ~0.5Hz heartbeat samples disk_usage delta and roughly every other tick
+  // observes delta=0 → rate_bytes_per_sec=0. The heartbeat emits `Some(0)`.
+  // The OLD merge `bytesRate: event.bytesRate ?? prev.bytesRate` treats
+  // `Some(0)` as a real value, so 0 clobbers the prior real rate.
+  // Downstream ProgressSection renders `bytesRate ? "· X MB/s" : ""` — 0 is
+  // falsy, so the rate suffix blinks off for one tick then back on. Fix:
+  // mergeProgress rejects 0 (only strictly-positive values win). This test
+  // models real heartbeats as a sequence of merges on a rolling prev.
+  describe("rate=0 heartbeat does not clobber sticky rate (parallel-transfer flicker fix)", () => {
+    it("rejects bytesRate=0 and keeps the previous non-zero rate sticky", () => {
+      // Start with a real sampled rate (58 MB/s) from a prior heartbeat.
+      let prev: ProgressState = {
+        current: 1000,
+        total: 5000,
+        currentFile: "BigAsset.uasset",
+        bytesDone: 300_000_000,
+        bytesTotal: 4_000_000_000,
+        bytesRate: 58_000_000,
+      };
+
+      // Tick 1: heartbeat samples delta=0 → emits Some(0). CORE ASSERTION:
+      // the rate must STAY 58_000_000 (0 does NOT clobber the sticky rate).
+      const tick1: ProgressEvent = {
+        current: 1001,
+        total: 5000,
+        currentFile: "BigAsset.uasset",
+        bytesDone: 305_000_000,
+        bytesTotal: 4_000_000_000,
+        bytesRate: 0,
+      };
+      let result = mergeProgress(prev, tick1);
+      expect(result.bytesRate).toBe(58_000_000);
+      // bytesDone/bytesTotal still carry the event value (NOT sticky-nonzero —
+      // the 0-rejection is specific to bytesRate).
+      expect(result.bytesDone).toBe(305_000_000);
+      expect(result.bytesTotal).toBe(4_000_000_000);
+
+      // Tick 2: a later positive sample (33 MB/s) still wins — proves the
+      // sticky-rate is not "stuck forever on the first non-zero value".
+      prev = result;
+      const tick2: ProgressEvent = {
+        current: 1002,
+        total: 5000,
+        currentFile: "BigAsset.uasset",
+        bytesDone: 338_000_000,
+        bytesTotal: 4_000_000_000,
+        bytesRate: 33_000_000,
+      };
+      result = mergeProgress(prev, tick2);
+      expect(result.bytesRate).toBe(33_000_000);
+
+      // Tick 3: a drain event (bytesRate=null, bytesDone/bytesTotal null too)
+      // — null still sticky from prev (existing drain behavior preserved).
+      prev = result;
+      const tick3: ProgressEvent = {
+        current: 1003,
+        total: 5000,
+        currentFile: "OtherAsset.uasset",
+        bytesDone: null,
+        bytesTotal: null,
+        bytesRate: null,
+      };
+      result = mergeProgress(prev, tick3);
+      expect(result.bytesRate).toBe(33_000_000);
+    });
+
+    it("first-tick rate=0 stays null when prev.bytesRate is null (no invented signal)", () => {
+      // Edge case: prev has no rate yet (first heartbeat was null/0). A 0
+      // must NOT invent a signal — stays null (matches the existing "first
+      // event with null bytes stays null" contract).
+      const prev: ProgressState = {
+        current: 0,
+        total: 0,
+        currentFile: "",
+        bytesDone: null,
+        bytesTotal: null,
+        bytesRate: null,
+      };
+      const eventData: ProgressEvent = {
+        current: 1,
+        total: 5000,
+        currentFile: "FirstAsset.uasset",
+        bytesRate: 0,
+      };
+      const result = mergeProgress(prev, eventData);
+      expect(result.bytesRate).toBeNull();
+    });
+  });
 });

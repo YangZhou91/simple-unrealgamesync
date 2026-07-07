@@ -43,6 +43,15 @@ export interface ProgressEvent {
  * Byte fields are sticky: if `event.bytesDone` (and friends) is null/undefined,
  * the previous value is preserved. If the event carries a real number, it wins.
  * `current`, `total`, and `currentFile` are always taken from the event.
+ *
+ * `bytesRate` is sticky AND rejects 0: only strictly-positive values win.
+ * p4 `--parallel=4` bursts writes; the ~0.5Hz heartbeat samples disk_usage
+ * delta and roughly every other tick observes delta=0 → emits `Some(0)`. The
+ * old `??` treated `Some(0)` as a real value, so 0 clobbered the prior real
+ * rate → the MB/s label blinked off for one tick then back on. Accepting only
+ * `> 0` holds the rate sticky on the last real sample (quick-260707-s1y).
+ * `bytesDone`/`bytesTotal` are NOT 0-rejected — 0 there is a legitimate
+ * "nothing transferred yet" signal.
  */
 export function mergeProgress(prev: ProgressState, event: ProgressEvent): ProgressState {
   return {
@@ -51,6 +60,6 @@ export function mergeProgress(prev: ProgressState, event: ProgressEvent): Progre
     currentFile: event.currentFile,
     bytesDone: event.bytesDone ?? prev.bytesDone,
     bytesTotal: event.bytesTotal ?? prev.bytesTotal,
-    bytesRate: event.bytesRate ?? prev.bytesRate,
+    bytesRate: event.bytesRate && event.bytesRate > 0 ? event.bytesRate : prev.bytesRate,
   };
 }
