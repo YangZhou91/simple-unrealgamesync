@@ -5,7 +5,13 @@ import { LogViewer } from "./LogViewer";
 import { Button } from "@/components/ui/button";
 import { Loader2 } from "lucide-react";
 import { info } from "@tauri-apps/plugin-log";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
+
+// quick-260707-kdf: How long p4Sync may run with no byte signal before we fall
+// back to the (front-loaded, inaccurate) count bar. Beats an infinite
+// indeterminate spin if DiskUsageSampler is broken on this machine. Tunable —
+// raise if the sampler's first heartbeat is consistently slow.
+const P4SYNC_PREP_TIMEOUT_MS = 20_000;
 
 interface RunningPanelProps {
   stepStatuses: Record<SyncStep, StepStatus>;
@@ -105,6 +111,36 @@ export function RunningPanel({
     }
     prev.current = next;
   }, [isIndeterminate, currentStep, progress.current, progress.total, p4SyncOverrun]);
+
+  // quick-260707-kdf: prep state — between "p4Sync started" and "first byte
+  // sample", the count bar races to ~100% (p4 front-loads all `- updating`
+  // lines in ~13s). Show an indeterminate bar + "正在准备… 将更新 N 个文件"
+  // until either the byte signal arrives (byte bar takes over) or 20s elapses
+  // (fall back to the count bar — it moves, beats an infinite spin).
+  const p4SyncEnteredAt = useRef<number | null>(null);
+  // Dummy state used ONLY to schedule a re-render at the 20s boundary so the
+  // fallback flips on time (React does not re-render on ref mutation). The
+  // heartbeat also re-renders every ~2s via progress updates, so the timer is
+  // a backstop for the edge case where the heartbeat stalls.
+  const [, forceTick] = useState(0);
+  useEffect(() => {
+    if (currentStep === "p4Sync") {
+      if (p4SyncEnteredAt.current === null) {
+        p4SyncEnteredAt.current = Date.now();
+        const id = setTimeout(() => forceTick((n) => n + 1), P4SYNC_PREP_TIMEOUT_MS);
+        return () => clearTimeout(id);
+      }
+      return;
+    }
+    p4SyncEnteredAt.current = null;
+  }, [currentStep]);
+
+  const inP4Sync = currentStep === "p4Sync";
+  const byteSignal = (progress.bytesDone ?? 0) > 0;
+  const prepElapsed = p4SyncEnteredAt.current != null
+    ? Date.now() - p4SyncEnteredAt.current
+    : 0;
+  const prep = inP4Sync && !p4SyncOverrun && !byteSignal && prepElapsed < P4SYNC_PREP_TIMEOUT_MS;
   return (
     <div className="flex h-full flex-col">
       <div className="text-center space-y-0.5 pt-2">
@@ -129,6 +165,10 @@ export function RunningPanel({
         indeterminate={isIndeterminate}
         indeterminateLabel={indeterminateLabel}
         indeterminateDetail={isIndeterminate ? lastLog : undefined}
+        // quick-260707-kdf: prep state — indeterminate bar + "正在准备…" label
+        // between p4Sync start and the first byte sample (or 20s fallback).
+        prep={prep}
+        prepLabel={prep ? `正在准备… 将更新 ${progress.total} 个文件` : undefined}
         // quick-260701-ep7: thread byte signal to ProgressSection. `?? undefined`
         // collapses null (typical non-heartbeat value) to "prop absent" so the
         // optional-prop defaults take over. Consumed ONLY in JSX render-time
