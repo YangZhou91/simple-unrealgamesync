@@ -8,11 +8,18 @@
 //! backlog) — no native byte progress. So we get real bytes from the OS, not
 //! from p4 stdout.
 //!
-//! This helper reads the kernel-level per-process `written_bytes` counter for
-//! the p4 child PID via sysinfo's `Process::disk_usage()`. Read-only, no
-//! privilege escalation (same-user process). The caller samples on a ~2s
-//! cadence from the p4Sync heartbeat; each sample yields the delta since the
-//! previous sample, the accumulated total, and a per-second rate.
+//! This helper reads the kernel-level per-process `total_written_bytes`
+//! counter (cumulative bytes written since process start) for the p4 child
+//! PID via sysinfo's `Process::disk_usage()`. Read-only, no privilege
+//! escalation (same-user process). The caller samples on a ~2s cadence from
+//! the p4Sync heartbeat; each sample yields the delta since the previous
+//! sample, the accumulated total, and a per-second rate.
+//!
+//! Field choice: sysinfo `DiskUsage` exposes `total_written_bytes` (cumulative)
+//! AND `written_bytes` (bytes since the last refresh). We read the CUMULATIVE
+//! field and delta it ourselves. Do NOT switch to `written_bytes` — reading it
+//! AND differencing would double-delta the per-refresh value. (sysinfo 0.32.1,
+//! src/common/system.rs:964.)
 //!
 //! T-ep7-01 (counter reset / wraparound): deltas are computed with
 //! `saturating_sub` — a reset yields delta 0, never underflow; accumulated
@@ -73,7 +80,11 @@ impl DiskUsageSampler {
             .refresh_processes(sysinfo::ProcessesToUpdate::Some(&pids), false);
         let proc = self.sys.process(self.pid)?;
         let du = proc.disk_usage();
-        let current = du.written_bytes;
+        // Read the CUMULATIVE counter, not `written_bytes` (which is per-refresh
+        // since the last call). We delta the cumulative ourselves below; reading
+        // the per-refresh field AND differencing would double-delta it.
+        // (sysinfo 0.32.1 DiskUsage: total_written_bytes=Total, written_bytes=since-last-refresh.)
+        let current = du.total_written_bytes;
         // T-ep7-01: saturating_sub handles counter reset / wraparound — a
         // reset yields delta 0, never underflow; accumulated stays monotonic.
         let delta = current.saturating_sub(self.last_written);
