@@ -12,6 +12,11 @@ import { Badge } from "@/components/ui/badge";
 import { X, AlertTriangle, FolderOpen, Download } from "lucide-react";
 import type { WorkspaceConfig } from "@/lib/types";
 import * as commands from "@/lib/commands";
+import {
+  loadUpdaterSettings,
+  saveUpdaterSettings,
+  DEFAULT_UPDATER_PROXY_URL,
+} from "@/lib/updaterSettings";
 
 interface SettingsDialogProps {
   open: boolean;
@@ -57,10 +62,25 @@ export function SettingsDialog({
     { kind: "ok"; message: string } | { kind: "err"; message: string } | null
   >(null);
 
+  // quick-260710-gfp: app-global updater-proxy state. Proxy toggle + editable
+  // URL persisted via tauri-plugin-store (".settings" file). proxyLoaded
+  // distinguishes "haven't read yet" from "read & off" so the toggle doesn't
+  // visibly flash off→on when the dialog opens with the proxy enabled.
+  const [proxyEnabled, setProxyEnabled] = useState(false);
+  const [proxyUrl, setProxyUrl] = useState(DEFAULT_UPDATER_PROXY_URL);
+  const [proxyLoaded, setProxyLoaded] = useState(false);
+  const [proxySaving, setProxySaving] = useState(false);
+  const [proxyStatus, setProxyStatus] = useState<
+    { kind: "ok"; message: string } | { kind: "err"; message: string } | null
+  >(null);
+
   useEffect(() => {
     if (!open) {
       setLogPath(null);
       setLogStatus(null);
+      // quick-260710-gfp: reset proxy loader state so the next open re-reads.
+      setProxyLoaded(false);
+      setProxyStatus(null);
       return;
     }
     let cancelled = false;
@@ -71,6 +91,21 @@ export function SettingsDialog({
       })
       .catch(() => {
         if (!cancelled) setLogPath(null);
+      });
+    // quick-260710-gfp: load persisted proxy settings when the dialog opens.
+    // Mirrors the logPath loader's cancelled-guard shape.
+    loadUpdaterSettings()
+      .then((s) => {
+        if (!cancelled) {
+          setProxyEnabled(s.proxyEnabled);
+          setProxyUrl(s.proxyUrl);
+          setProxyLoaded(true);
+        }
+      })
+      .catch(() => {
+        // Read failed — fall through with defaults (proxy stays off, default
+        // URL). The user can still toggle + save to write a fresh store.
+        if (!cancelled) setProxyLoaded(true);
       });
     return () => {
       cancelled = true;
@@ -162,6 +197,45 @@ export function SettingsDialog({
     }
   };
 
+  // quick-260710-gfp: toggle persists immediately so enable/disable takes
+  // effect even if the user closes the dialog without hitting Save — the
+  // next auto-check reads settings fresh and a stale in-memory toggle would
+  // otherwise leak through. Carries the proxySaving guard.
+  const handleProxyToggle = async (next: boolean) => {
+    if (proxySaving) return;
+    setProxyEnabled(next);
+    setProxyStatus(null);
+    setProxySaving(true);
+    try {
+      await saveUpdaterSettings({ proxyEnabled: next, proxyUrl });
+    } catch (e) {
+      setProxyStatus({ kind: "err", message: String(e) });
+    } finally {
+      setProxySaving(false);
+    }
+  };
+
+  // Save button for the URL field. Trims on blur-equivalent; if empty, falls
+  // back to DEFAULT in state AND in what we persist (never store an empty
+  // URL — saveUpdaterSettings enforces this too, defense in depth).
+  const handleSaveProxyUrl = async () => {
+    if (proxySaving) return;
+    const trimmed = proxyUrl.trim();
+    const normalized =
+      trimmed.length > 0 ? trimmed : DEFAULT_UPDATER_PROXY_URL;
+    setProxyUrl(normalized);
+    setProxyStatus(null);
+    setProxySaving(true);
+    try {
+      await saveUpdaterSettings({ proxyEnabled, proxyUrl: normalized });
+      setProxyStatus({ kind: "ok", message: "Saved" });
+    } catch (e) {
+      setProxyStatus({ kind: "err", message: String(e) });
+    } finally {
+      setProxySaving(false);
+    }
+  };
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="bg-[hsl(0,0%,14%)] border-border text-foreground">
@@ -210,6 +284,61 @@ export function SettingsDialog({
                 {logStatus.message}
               </p>
             )}
+          </div>
+
+          {/* quick-260710-gfp: app-global Network/Proxy section — always shown.
+              Routes the auto-updater's GitHub traffic through a local proxy
+              (default off = direct GitHub, unchanged from pre-feature). */}
+          <div className="space-y-2 rounded-md border border-border p-3">
+            <label className="text-sm text-muted block">Network / 代理</label>
+            <p className="text-xs text-muted-foreground">
+              Route the auto-updater's GitHub traffic through this proxy (e.g.
+              a local Clash mixed-port). Leave off for direct connection.
+            </p>
+            <label className="flex items-center gap-2 text-sm pt-1 cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={proxyEnabled}
+                onChange={(e) => handleProxyToggle(e.target.checked)}
+                disabled={proxySaving || !proxyLoaded}
+                className="h-4 w-4 rounded border-border bg-[hsl(0,0%,9%)] accent-accent cursor-pointer"
+                aria-label="Enable updater proxy"
+              />
+              <span>Enable proxy for auto-updater</span>
+            </label>
+            <Input
+              type="text"
+              value={proxyUrl}
+              onChange={(e) => {
+                setProxyUrl(e.target.value);
+                setProxyStatus(null);
+              }}
+              onBlur={() => {
+                const trimmed = proxyUrl.trim();
+                setProxyUrl(trimmed.length > 0 ? trimmed : DEFAULT_UPDATER_PROXY_URL);
+              }}
+              placeholder={DEFAULT_UPDATER_PROXY_URL}
+              disabled={!proxyEnabled || proxySaving || !proxyLoaded}
+              className="bg-[hsl(0,0%,9%)] border-border"
+              aria-label="Proxy URL"
+            />
+            <div className="flex flex-wrap items-center gap-2 pt-1">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleSaveProxyUrl}
+                disabled={proxySaving || !proxyEnabled || !proxyLoaded}
+              >
+                Save URL
+              </Button>
+              {proxyStatus && (
+                <p
+                  className={`text-xs ${proxyStatus.kind === "ok" ? "text-emerald-400" : "text-destructive"}`}
+                >
+                  {proxyStatus.message}
+                </p>
+              )}
+            </div>
           </div>
 
           {workspace && (
