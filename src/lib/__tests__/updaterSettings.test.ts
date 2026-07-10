@@ -39,13 +39,17 @@ vi.mock("@tauri-apps/plugin-store", () => ({
 
 function makeFakeStore(initial: EntryMap = {}): FakeStore & {
   entries: EntryMap;
-  saveCalls: number;
+  getSaveCalls: () => number;
 } {
   const entries: EntryMap = { ...initial };
+  // Closed-over counter — the returned store's save() increments this. Read
+  // via the getSaveCalls() accessor so callers see the live value (a plain
+  // property on the returned object would be a stale snapshot at return time
+  // and never update as save() runs).
   let saveCalls = 0;
   return {
     entries,
-    saveCalls,
+    getSaveCalls: () => saveCalls,
     get: async <T>(key: string) => entries[key] as T | undefined,
     set: async (key: string, value: unknown) => {
       entries[key] = value;
@@ -126,7 +130,7 @@ describe("updaterSettings", () => {
     expect(fake.entries["updater.proxy_enabled"]).toBe(true);
     expect(fake.entries["updater.proxy_url"]).toBe("http://127.0.0.1:8888");
     // save() called exactly once per saveUpdaterSettings.
-    expect(fake.saveCalls).toBe(1);
+    expect(fake.getSaveCalls()).toBe(1);
 
     // Re-read returns the persisted values (no re-load of plugin-store: the
     // module-level cache returns the same fake handle).
