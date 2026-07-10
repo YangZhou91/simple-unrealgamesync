@@ -1,11 +1,21 @@
-import { describe, it, expect } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { describe, it, expect, vi, beforeEach } from "vitest";
+import { render, screen, waitFor } from "@testing-library/react";
+import { info } from "@tauri-apps/plugin-log";
 import { IdlePanel } from "@/components/sync/IdlePanel";
 import { ErrorPanel } from "@/components/sync/ErrorPanel";
 import { StepIndicator } from "@/components/sync/StepIndicator";
 import { SyncDashboard } from "@/components/sync/SyncDashboard";
 
 import type { SyncStep, WorkspaceConfig, GitBranchInfo, HistoryRecord } from "@/lib/types";
+
+// quick-260710-sxf: mock the log plugin so RunningPanel's render-state effect
+// info() calls are observable. The factory returns a thenable so the effect's
+// `.catch(() => {})` is safe (a bare vi.fn() returns undefined → `.catch`
+// throws). vitest hoists vi.mock above imports, so `import { info }` above
+// resolves to this mock. Only `info` is imported by the rendered tree.
+vi.mock("@tauri-apps/plugin-log", () => ({
+  info: vi.fn(() => Promise.resolve()),
+}));
 
 describe("IdlePanel", () => {
   it("shows Ready to sync when no last result", () => {
@@ -363,5 +373,109 @@ describe("RunningPanel p4SyncOverrun byte-bar priority", () => {
     );
     // Legacy "{total}+ files…" indeterminate fallback preserved.
     expect(screen.getByText(/13657\+ files/)).toBeDefined();
+  });
+});
+
+// quick-260710-sxf: render-state log — RunningPanel emits a throttled `[ui]
+// render` line recording the displayed progress MODE (byteBar/countBar/prep/
+// indeterminate) so it is reconstructable from the app log. The mode is otherwise
+// un-logged (only prep transitions, count, and the byte signal are). Mirrors
+// ProgressSection's render priority (prep > indeterminate > byteBar > countBar).
+describe("RunningPanel render-state log (quick-260710-sxf)", () => {
+  const baseProps = {
+    stepStatuses: {
+      closeUe: "pending" as const,
+      cleanDevDir: "pending" as const,
+      p4Sync: "pending" as const,
+      genProject: "pending" as const,
+    },
+    logLines: [] as string[],
+    currentStep: null as SyncStep | null,
+    errorInfo: null as { step: string; error: string } | null,
+    lastSyncResult: null as { cl: string | null; fileCount: number; time: string } | null,
+    selectedWorkspace: null as WorkspaceConfig | null,
+    targetCl: "",
+    onTargetClChange: (_cl: string) => {},
+    stepDescriptions: {
+      closeUe: null as string | null,
+      cleanDevDir: null as string | null,
+      p4Sync: null as string | null,
+      genProject: null as string | null,
+    },
+    onStartSync: () => {},
+    onStopSync: () => {},
+    onRetryStep: (_step: string) => {},
+    onDismissError: () => {},
+    onRollback: () => {},
+    historyRecords: [] as HistoryRecord[],
+    historyLoading: false,
+    historyRollingBack: false,
+    gitState: "idle" as const,
+    gitLogLines: [] as string[],
+    gitErrorInfo: null as { error: string } | null,
+    onGitPull: () => {},
+    onStopGitPull: () => {},
+    onDismissGitResult: () => {},
+    gitBranchInfo: null as GitBranchInfo | null,
+    gitBranchLoading: false,
+    behindInfo: null,
+    behindLoading: false,
+  };
+
+  // mockClear so each test sees only its own render's info() calls (earlier
+  // tests in this file also render RunningPanel → render-state effect fires).
+  beforeEach(() => {
+    (info as unknown as { mockClear: () => void }).mockClear();
+  });
+
+  it("emits [ui] render mode=byteBar when byte signal is live during p4Sync", async () => {
+    const infoMock = info as unknown as { mock: { calls: unknown[][] } };
+    const progress = {
+      current: 50000,
+      total: 164038,
+      currentFile: "",
+      bytesDone: 300_000_000,
+      bytesTotal: 4_000_000_000,
+      bytesRate: 45_000_000,
+    };
+    render(
+      <SyncDashboard
+        {...baseProps}
+        syncState="running"
+        currentStep="p4Sync"
+        progress={progress}
+      />,
+    );
+    // The render-state effect runs after mount; waitFor flushes passive effects.
+    await waitFor(() => {
+      const calls = infoMock.mock.calls.map((c) => String(c[0]));
+      expect(
+        calls.some((s) => /\[ui\] render.*mode=byteBar/.test(s)),
+      ).toBe(true);
+    });
+  });
+
+  it("emits [ui] render mode=prep during p4Sync with no byte signal (under 20s)", async () => {
+    const infoMock = info as unknown as { mock: { calls: unknown[][] } };
+    const progress = {
+      current: 50000,
+      total: 164038,
+      currentFile: "",
+      bytesDone: null,
+      bytesTotal: null,
+      bytesRate: null,
+    };
+    render(
+      <SyncDashboard
+        {...baseProps}
+        syncState="running"
+        currentStep="p4Sync"
+        progress={progress}
+      />,
+    );
+    await waitFor(() => {
+      const calls = infoMock.mock.calls.map((c) => String(c[0]));
+      expect(calls.some((s) => /\[ui\] render.*mode=prep/.test(s))).toBe(true);
+    });
   });
 });

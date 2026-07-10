@@ -147,6 +147,43 @@ export function RunningPanel({
     ? Date.now() - p4SyncEnteredAt.current
     : 0;
   const prep = inP4Sync && !p4SyncOverrun && !byteSignal && prepElapsed < P4SYNC_PREP_TIMEOUT_MS;
+
+  // quick-260710-sxf: render-state log. One throttled (~1500ms) `[ui] render`
+  // line recording the displayed progress MODE so the byte-bar-vs-count-bar
+  // decision is reconstructable from the app log (that decision is otherwise NOT
+  // logged — only prep transitions / count / byte signal are). Mirrors
+  // ProgressSection's render priority (prep > indeterminate > byteBar > countBar)
+  // so the logged mode matches what the user actually saw. LOG-ONLY — no render
+  // change. First effect run always logs (lastRenderLogRef initial = 0 → now-0 is
+  // huge ≥ 1500); subsequent runs are gated to one line per ~1.5s.
+  const lastRenderLogRef = useRef<number>(0);
+  useEffect(() => {
+    if (!currentStep) return;
+    const now = Date.now();
+    if (now - lastRenderLogRef.current < 1500) return;
+    lastRenderLogRef.current = now;
+
+    const bytesDone = progress.bytesDone ?? 0;
+    const bytesTotal = progress.bytesTotal ?? 0;
+    const showByteBar = !isIndeterminate && !prep && (bytesDone > 0 || bytesTotal > 0);
+    let mode: string;
+    if (prep) {
+      mode = "prep";
+    } else if (isIndeterminate) {
+      mode = "indeterminate";
+    } else if (showByteBar) {
+      mode = bytesTotal > 0 ? "byteBar" : "byteBarRateOnly";
+    } else {
+      mode = "countBar";
+    }
+    const countPct = progress.total > 0 ? (progress.current / progress.total) * 100 : 0;
+    const bytePct = bytesTotal > 0 ? Math.min(100, (bytesDone / bytesTotal) * 100) : 0;
+    const barPct = prep || isIndeterminate ? -1 : showByteBar ? bytePct : countPct;
+    info(
+      `[ui] render step=${currentStep} mode=${mode} barPct=${barPct >= 0 ? barPct.toFixed(1) : "indet"} current=${progress.current}/${progress.total} bytesDone=${bytesDone} bytesTotal=${progress.bytesTotal ?? "null"} bytesRate=${progress.bytesRate ?? "null"}`,
+    ).catch(() => {});
+  }, [currentStep, isIndeterminate, prep, progress.current, progress.total, progress.bytesDone, progress.bytesTotal, progress.bytesRate]);
+
   return (
     <div className="flex h-full flex-col">
       <div className="text-center space-y-0.5 pt-2">
