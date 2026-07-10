@@ -2,6 +2,16 @@
 
 All notable changes to Simple UnrealGameSync will be documented in this file.
 
+## [1.4.1] - 2026-07-10
+
+### Added
+- **Auto-updater local proxy (bypass GFW)**: Settings → 网络/代理 toggle routes the auto-updater's GitHub egress through a local Clash proxy (default `http://localhost:7897`) via the first-party `check({ proxy })` API. For users behind the GFW whose v1.4.0 update wouldn't apply.
+- **p4Sync prep state**: indeterminate "正在准备…" bar during the 0–20s window before the first byte sample, so the count bar no longer races to 100% in ~13s during the silent transfer tail.
+
+### Fixed
+- **Byte-bar undercount (bar looked stuck at ~13%)**: `DiskUsageSampler` was reading sysinfo's per-interval `written_bytes` field and differencing it again, undercounting ~7.7x (a 9.37 GB sync showed only 1.21 GB on the bar). Now reads the cumulative `total_written_bytes` counter → the bar fills to ~100%.
+- **Byte-bar flicker / coverage**: sticky byte-field merge (count↔byte flicker fixed), `bytesRate` rejects 0 (MB/s no longer blinks every ~2s), the byte bar stays visible through the count-overrun tail, and the Revision(@CL) `-N` denominator path-overlap (was inflating to ~969 GB) is resolved.
+
 ## [1.4.0] - 2026-07-06
 
 ### Added
