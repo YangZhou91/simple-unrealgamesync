@@ -36,15 +36,8 @@ async function loadFreshModule() {
 }
 
 describe("classifyProxyError", () => {
-  // Re-import once; classifyProxyError is pure — no per-test mock state needed.
-  let mod: typeof import("@/lib/updaterProxyTest");
-  it("loads", async () => {
-    mod = await loadFreshModule();
-  });
-
-  // The classify tests below use `mod` from the it("loads") above via a lazy
-  // re-load, but to keep them independent and deterministic we re-import at
-  // the top of each case.
+  // classifyProxyError is pure — no per-test mock state needed. Re-import per
+  // case via classifyMod() so the mocked plugin registry is fresh.
   async function classifyMod() {
     return await loadFreshModule();
   }
