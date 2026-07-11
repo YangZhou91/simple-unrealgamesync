@@ -17,6 +17,7 @@ import {
   saveUpdaterSettings,
   DEFAULT_UPDATER_PROXY_URL,
 } from "@/lib/updaterSettings";
+import { runProxyConnectionTest } from "@/lib/updaterProxyTest";
 
 interface SettingsDialogProps {
   open: boolean;
@@ -73,6 +74,14 @@ export function SettingsDialog({
   const [proxyStatus, setProxyStatus] = useState<
     { kind: "ok"; message: string } | { kind: "err"; message: string } | null
   >(null);
+  // quick-260711-jpq: Test-button state. proxyTestStatus shadows proxyStatus
+  // so the single inline <p> shows whichever fired most recently (a test
+  // result shouldn't be buried under a stale "Saved" message, and vice
+  // versa). Same ok/err shape as proxyStatus so the color branch is reused.
+  const [proxyTesting, setProxyTesting] = useState(false);
+  const [proxyTestStatus, setProxyTestStatus] = useState<
+    { kind: "ok"; message: string } | { kind: "err"; message: string } | null
+  >(null);
 
   useEffect(() => {
     if (!open) {
@@ -81,6 +90,8 @@ export function SettingsDialog({
       // quick-260710-gfp: reset proxy loader state so the next open re-reads.
       setProxyLoaded(false);
       setProxyStatus(null);
+      // quick-260711-jpq: clear any stale test result on close.
+      setProxyTestStatus(null);
       return;
     }
     let cancelled = false;
@@ -205,6 +216,9 @@ export function SettingsDialog({
     if (proxySaving) return;
     setProxyEnabled(next);
     setProxyStatus(null);
+    // quick-260711-jpq: a toggle is a proxy state change — clear the stale
+    // test result so the inline line doesn't lie about the old config.
+    setProxyTestStatus(null);
     setProxySaving(true);
     try {
       await saveUpdaterSettings({ proxyEnabled: next, proxyUrl });
@@ -225,6 +239,8 @@ export function SettingsDialog({
       trimmed.length > 0 ? trimmed : DEFAULT_UPDATER_PROXY_URL;
     setProxyUrl(normalized);
     setProxyStatus(null);
+    // quick-260711-jpq: saving a new URL invalidates any prior test result.
+    setProxyTestStatus(null);
     setProxySaving(true);
     try {
       await saveUpdaterSettings({ proxyEnabled, proxyUrl: normalized });
@@ -233,6 +249,69 @@ export function SettingsDialog({
       setProxyStatus({ kind: "err", message: String(e) });
     } finally {
       setProxySaving(false);
+    }
+  };
+
+  // quick-260711-jpq: extract the port from a proxy URL for the
+  // "代理不可达：Clash 未在 <port> 监听" message. Never throws — malformed
+  // user input falls back to the substring after the last ":".
+  function extractPort(url: string): string {
+    try {
+      const port = new URL(url).port;
+      if (port) return port;
+    } catch {
+      // not a parseable URL — fall through to the substring heuristic
+    }
+    const idx = url.lastIndexOf(":");
+    if (idx >= 0 && idx < url.length - 1) {
+      const tail = url.slice(idx + 1);
+      // Strip any trailing path/fragment/query so "host:7897/foo" -> "7897".
+      const match = tail.match(/^\d+/);
+      if (match) return match[0];
+      return tail;
+    }
+    return url;
+  }
+
+  // quick-260711-jpq: Test-connection handler. Exercises the updater's
+  // first-party check({ proxy, timeout }) — NOT fetch — so the proxy is
+  // applied at the Rust reqwest layer (the only test that actually proves
+  // the GFW-proxy reachability). Connectivity-only; NEVER installs.
+  const handleTestProxy = async () => {
+    if (proxyTesting || proxySaving || !proxyEnabled || !proxyLoaded) return;
+    // Mirror handleSaveProxyUrl's fallback so an empty field still tests the
+    // default — never test an empty string.
+    const url = proxyUrl.trim() || DEFAULT_UPDATER_PROXY_URL;
+    setProxyTesting(true);
+    setProxyTestStatus(null);
+    try {
+      const result = await runProxyConnectionTest({ proxyUrl: url, timeout: 8000 });
+      if (result.kind === "ok") {
+        setProxyTestStatus({
+          kind: "ok",
+          message: result.note
+            ? `✓ 代理可达 GitHub（${result.note}）`
+            : "✓ 代理可达 GitHub",
+        });
+      } else if (result.kind === "refused") {
+        setProxyTestStatus({
+          kind: "err",
+          message: `✗ 代理不可达：Clash 未在 ${extractPort(url)} 监听`,
+        });
+      } else if (result.kind === "timeout") {
+        setProxyTestStatus({
+          kind: "err",
+          message: "✗ 代理可达但 GitHub 通不过：检查 Clash 规则是否放行 github.com",
+        });
+      } else {
+        setProxyTestStatus({ kind: "err", message: `✗ ${result.message}` });
+      }
+    } catch (e) {
+      // Defensive: runProxyConnectionTest should not throw, but a thrown
+      // plugin shim would otherwise leave proxyTesting stuck.
+      setProxyTestStatus({ kind: "err", message: `✗ ${String(e)}` });
+    } finally {
+      setProxyTesting(false);
     }
   };
 
@@ -312,6 +391,8 @@ export function SettingsDialog({
               onChange={(e) => {
                 setProxyUrl(e.target.value);
                 setProxyStatus(null);
+                // quick-260711-jpq: URL edit invalidates any prior test result.
+                setProxyTestStatus(null);
               }}
               onBlur={() => {
                 const trimmed = proxyUrl.trim();
@@ -331,13 +412,39 @@ export function SettingsDialog({
               >
                 Save URL
               </Button>
-              {proxyStatus && (
-                <p
-                  className={`text-xs ${proxyStatus.kind === "ok" ? "text-emerald-400" : "text-destructive"}`}
-                >
-                  {proxyStatus.message}
-                </p>
-              )}
+              {/* quick-260711-jpq: Test button — exercises the updater's
+                  first-party check({ proxy, timeout: 8000 }), NOT fetch. The
+                  proxy is applied at the Rust reqwest layer; a fetch would
+                  bypass it and only test direct connectivity. Disabled when
+                  proxy off, URL empty (after trim), test-in-flight, or
+                  settings saving. */}
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleTestProxy}
+                disabled={
+                  proxyTesting ||
+                  proxySaving ||
+                  !proxyEnabled ||
+                  !proxyLoaded ||
+                  proxyUrl.trim().length === 0
+                }
+              >
+                {proxyTesting ? "测试中…" : "测试连接"}
+              </Button>
+              {/* Single inline status line: show the most-recent test result
+                  if present, else the proxy save status. They never stack. */}
+              {(() => {
+                const status = proxyTestStatus ?? proxyStatus;
+                if (!status) return null;
+                return (
+                  <p
+                    className={`text-xs ${status.kind === "ok" ? "text-emerald-400" : "text-destructive"}`}
+                  >
+                    {status.message}
+                  </p>
+                );
+              })()}
             </div>
           </div>
 
