@@ -49,6 +49,7 @@ impl SyncOrchestrator {
         &self,
         workspace_id: String,
         target_cl: Option<String>,
+        include_engine: bool,
         channel: CountingChannel,
         app: AppHandle,
     ) -> Result<(), AppError> {
@@ -59,7 +60,7 @@ impl SyncOrchestrator {
         }
 
         let result = self
-            .run_pipeline_inner(workspace_id, target_cl, channel, app)
+            .run_pipeline_inner(workspace_id, target_cl, include_engine, channel, app)
             .await;
         self.pipeline_running.store(false, Ordering::SeqCst);
         result
@@ -69,6 +70,7 @@ impl SyncOrchestrator {
         &self,
         workspace_id: String,
         target_cl: Option<String>,
+        include_engine: bool,
         channel: CountingChannel,
         app: AppHandle,
     ) -> Result<(), AppError> {
@@ -107,6 +109,7 @@ impl SyncOrchestrator {
             target_cl: target_cl.clone(),
             parallel_threads: workspace.parallel_threads,
             exclusions: workspace.exclusions.clone(),
+            include_engine,
         };
 
         // Step 1: Close UE Editor
@@ -383,6 +386,10 @@ impl SyncOrchestrator {
             target_cl: Some(target_cl.clone()),
             parallel_threads: workspace.parallel_threads,
             exclusions: workspace.exclusions.clone(),
+            // Rollback ALWAYS syncs the engine — the engine version pinned to
+            // the target CL is part of rollback semantics (do NOT add a toggle
+            // param to start_rollback).
+            include_engine: true,
         };
 
         let files_result = self
@@ -501,6 +508,7 @@ impl SyncOrchestrator {
         workspace_id: String,
         step: String,
         target_cl: Option<String>,
+        include_engine: bool,
         channel: CountingChannel,
         app: AppHandle,
     ) -> Result<(), AppError> {
@@ -511,7 +519,7 @@ impl SyncOrchestrator {
         }
 
         let result = self
-            .retry_step_inner(workspace_id, step, target_cl, channel, app)
+            .retry_step_inner(workspace_id, step, target_cl, include_engine, channel, app)
             .await;
         self.pipeline_running.store(false, Ordering::SeqCst);
         result
@@ -522,6 +530,7 @@ impl SyncOrchestrator {
         workspace_id: String,
         step: String,
         target_cl: Option<String>,
+        include_engine: bool,
         channel: CountingChannel,
         app: AppHandle,
     ) -> Result<(), AppError> {
@@ -554,6 +563,7 @@ impl SyncOrchestrator {
                     target_cl: target_cl.clone(),
                     parallel_threads: workspace.parallel_threads,
                     exclusions: workspace.exclusions.clone(),
+                    include_engine,
                 };
                 let cancel_token = CancellationToken::new();
                 self.process_manager
@@ -749,6 +759,7 @@ impl SyncOrchestrator {
             target_cl: options.target_cl.clone(),
             parallel_threads: options.parallel_threads,
             exclusions: options.exclusions.clone(),
+            include_engine: options.include_engine,
         };
         let cancel_clone = cancel.clone();
 

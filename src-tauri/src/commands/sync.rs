@@ -22,13 +22,14 @@ pub async fn start_sync(
     state: State<'_, Arc<SyncOrchestrator>>,
     workspace_id: String,
     target_cl: Option<String>,
+    include_engine: bool,
     on_event: Channel<SyncEvent>,
 ) -> Result<(), String> {
     // SC#3 gate: Option<String> renders via the as_deref().unwrap_or("none")
     // shim — NEVER `{:?}`. workspace_id is opaque (not identity), passes redact
     // unchanged. Routed through the Phase-10 redact net (T-11-PII).
     let args_redacted = crate::utils::redact::redact(&format!(
-        "workspace_id={workspace_id} target_cl={}",
+        "workspace_id={workspace_id} target_cl={} include_engine={include_engine}",
         target_cl.as_deref().unwrap_or("none")
     ))
     .into_owned();
@@ -48,7 +49,7 @@ pub async fn start_sync(
         // from the task_local the wrapper already scoped).
         let channel = CountingChannel::new(on_event);
         state
-            .run_pipeline(workspace_id, target_cl, channel, app)
+            .run_pipeline(workspace_id, target_cl, include_engine, channel, app)
             .await
             .map_err(|e| e.to_string())
     })
@@ -89,6 +90,7 @@ pub async fn check_sync_behind(
             target_cl: None,
             parallel_threads: ws.parallel_threads,
             exclusions: ws.exclusions.clone(),
+            include_engine: false,
         };
 
         let (request_id, token) = state.begin_behind_check().await;
@@ -168,10 +170,11 @@ pub async fn retry_step(
     workspace_id: String,
     step: String,
     target_cl: Option<String>,
+    include_engine: bool,
     on_event: Channel<SyncEvent>,
 ) -> Result<(), String> {
     let args_redacted = crate::utils::redact::redact(&format!(
-        "workspace_id={workspace_id} step={step} target_cl={}",
+        "workspace_id={workspace_id} step={step} target_cl={} include_engine={include_engine}",
         target_cl.as_deref().unwrap_or("none")
     ))
     .into_owned();
@@ -184,7 +187,7 @@ pub async fn retry_step(
         // D-04 (Phase 12 / HOTUI-12): wrap once at the command boundary.
         let channel = CountingChannel::new(on_event);
         state
-            .retry_step(workspace_id, step, target_cl, channel, app)
+            .retry_step(workspace_id, step, target_cl, include_engine, channel, app)
             .await
             .map_err(|e| e.to_string())
     })

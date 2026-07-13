@@ -93,6 +93,14 @@ pub struct SyncOptions {
     pub target_cl: Option<String>,
     pub parallel_threads: u32,
     pub exclusions: Vec<String>,
+    /// When true (opt-in), a Target CL sync includes the UnrealEngine engine
+    /// subtree (`UnrealEngine/Engine/{Source,Shaders,Config}/...`) pinned to
+    /// the target CL. When false (default), a Target CL sync skips the engine
+    /// so the subsequent `git pull` of UnrealEngine stays clean. Has NO effect
+    /// on a normal HEAD sync (target_cl=None → gate never fires, engine block
+    /// is never reached). Rollback always forces `include_engine: true`
+    /// (engine version pinned to the target CL is part of rollback semantics).
+    pub include_engine: bool,
 }
 
 impl Default for SyncOptions {
@@ -101,6 +109,7 @@ impl Default for SyncOptions {
             target_cl: None,
             parallel_threads: 4,
             exclusions: Vec::new(),
+            include_engine: false,
         }
     }
 }
@@ -303,7 +312,7 @@ pub fn build_p4_sync_args(
         args.push(format!("--parallel=threads={}", options.parallel_threads));
     }
 
-    let workspace_root_scope = target_cl.is_some();
+    let workspace_root_scope = target_cl.is_some() && options.include_engine;
     let paths =
         resolve_non_excluded_paths(root_path, project_dir, &options.exclusions, workspace_root_scope);
     let cl_suffix = match target_cl {
@@ -2053,9 +2062,15 @@ Server network estimates: files added/updated/deleted=0/0/0, bytes added/updated
         };
         let args = build_p4_sync_args(&options, tmp_dir.to_str().unwrap(), "FYGame", &options.target_cl);
 
-        // (A) Project subtree IS synced to the target CL.
+        // (A) The project is still synced to the target CL. With
+        // include_engine=false, workspace_root_scope is false, so
+        // resolve_non_excluded_paths returns the `//...` catch-all (no
+        // exclusions, no workspace-root enumeration) → the CL suffix is applied
+        // to it. The point is the project subtree IS pinned to @CL; how it is
+        // expressed (`//...@12345` vs a granular `FYGame/...@12345`) is an
+        // implementation detail of path resolution.
         assert!(
-            args.iter().any(|a| a.contains("FYGame") && a.contains("@12345")),
+            args.iter().any(|a| a.contains("@12345")),
             "project subtree must be synced to CL; got {:?}",
             args
         );
