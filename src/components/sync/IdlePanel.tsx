@@ -26,6 +26,12 @@ interface IdlePanelProps {
   // value (App never lets that happen at runtime).
   stream?: string | null;
   p4Client?: string | null;
+  // quick-260713-kx6: opt-out of syncing UnrealEngine engine source during a
+  // Target CL sync. Defaults OFF (syncEngine=false) and onSyncEngineChange is a
+  // no-op so existing test fixtures keep type-checking. App.tsx always threads
+  // both at runtime.
+  syncEngine?: boolean;
+  onSyncEngineChange?: (v: boolean) => void;
 }
 
 export function IdlePanel({
@@ -42,6 +48,8 @@ export function IdlePanel({
   behindLoading,
   stream = null,
   p4Client = null,
+  syncEngine = false,
+  onSyncEngineChange = () => {},
 }: IdlePanelProps) {
   const [clError, setClError] = useState<string | null>(null);
 
@@ -93,9 +101,27 @@ export function IdlePanel({
           <p className="text-xs text-destructive mt-1">{clError}</p>
         )}
         {targetCl.length > 0 && !clError && (
-          <p className="text-xs text-muted-foreground mt-1">
-            Syncing project + UnrealEngine
-          </p>
+          <>
+            {/* quick-260713-kx6: opt-out of syncing UnrealEngine engine source.
+                Rendered ONLY when a Target CL is entered. Defaults OFF so the
+                subsequent `git pull` of UnrealEngine stays clean. */}
+            <label className="flex items-center gap-2 mt-2 cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={syncEngine}
+                onChange={(e) => onSyncEngineChange(e.target.checked)}
+                className="h-4 w-4 cursor-pointer accent-accent"
+              />
+              <span className="text-xs text-muted-foreground">
+                同步 UnrealEngine 引擎
+              </span>
+            </label>
+            <p className="text-xs text-muted-foreground mt-1">
+              {syncEngine
+                ? "Syncing project + UnrealEngine"
+                : "Syncing project only (engine via Git Pull)"}
+            </p>
+          </>
         )}
       </div>
 

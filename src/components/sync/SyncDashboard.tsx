@@ -46,6 +46,12 @@ interface SyncDashboardProps {
   // type-checking — App.tsx always threads both at runtime.
   stream?: string | null;
   p4Client?: string | null;
+  // quick-260713-kx6: opt-out of syncing UnrealEngine engine source during a
+  // Target CL sync. Defaults OFF (syncEngine=false) and onSyncEngineChange is a
+  // no-op so the existing test fixture keeps type-checking. App.tsx always
+  // threads both at runtime.
+  syncEngine?: boolean;
+  onSyncEngineChange?: (v: boolean) => void;
 }
 
 export function SyncDashboard({
@@ -81,6 +87,8 @@ export function SyncDashboard({
   behindLoading,
   stream = null,
   p4Client = null,
+  syncEngine = false,
+  onSyncEngineChange = () => {},
 }: SyncDashboardProps) {
   const isSyncRunning = syncState === "running";
   const isBusy = isSyncRunning || historyRollingBack || gitState === "running";
@@ -151,6 +159,8 @@ export function SyncDashboard({
             behindLoading={behindLoading}
             stream={stream}
             p4Client={p4Client}
+            syncEngine={syncEngine}
+            onSyncEngineChange={onSyncEngineChange}
           />
         )}
       </TabsContent>

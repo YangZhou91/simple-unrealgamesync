@@ -24,6 +24,11 @@ export function useSync(onSyncComplete?: (cl: string | null) => void) {
   const [currentStep, setCurrentStep] = useState<SyncStep | null>(null);
   const [stepStatuses, setStepStatuses] = useState<StepStatuses>(initialStatuses);
   const [targetCl, setTargetCl] = useState<string>("");
+  // quick-260713-kx6: opt-out of syncing UnrealEngine engine source during a
+  // Target CL sync. Defaults OFF so the subsequent `git pull` of UnrealEngine
+  // stays clean. Only the Target CL path reads this — normal HEAD sync and
+  // rollback are unaffected (rollback hardcodes include_engine=true server-side).
+  const [syncEngine, setSyncEngine] = useState<boolean>(false);
   const [stepDescriptions, setStepDescriptions] = useState<
     Record<SyncStep, string | null>
   >({
@@ -292,7 +297,7 @@ export function useSync(onSyncComplete?: (cl: string | null) => void) {
       setStepStatuses(initialStatuses);
       startFlushTimer();
       try {
-        await commands.startSync(workspaceId, channel, cl || undefined);
+        await commands.startSync(workspaceId, channel, cl || undefined, syncEngine);
         // Authoritative completion: the command only resolves after the backend
         // pipeline fully ends. If the terminal Channel event (syncCompleted/
         // syncCancelled/syncFailed) was dropped while the WebView was backgrounded,
@@ -312,7 +317,7 @@ export function useSync(onSyncComplete?: (cl: string | null) => void) {
         stopFlushTimer();
       }
     },
-    [createEventHandler, startFlushTimer, stopFlushTimer, resetToIdle, onSyncComplete],
+    [createEventHandler, startFlushTimer, stopFlushTimer, resetToIdle, onSyncComplete, syncEngine],
   );
 
   const stopSync = useCallback(async () => {
@@ -329,7 +334,7 @@ export function useSync(onSyncComplete?: (cl: string | null) => void) {
       setStepStatuses(initialStatuses);
       startFlushTimer();
       try {
-        await commands.retryStep(workspaceId, step, channel, targetCl || undefined);
+        await commands.retryStep(workspaceId, step, channel, targetCl || undefined, syncEngine);
         // Authoritative completion: command resolution is a reliable end-of-pipeline
         // signal independent of best-effort Channel delivery. Reconcile if the
         // terminal event was lost while backgrounded.
@@ -345,7 +350,7 @@ export function useSync(onSyncComplete?: (cl: string | null) => void) {
         stopFlushTimer();
       }
     },
-    [createEventHandler, targetCl, startFlushTimer, stopFlushTimer, resetToIdle, onSyncComplete],
+    [createEventHandler, targetCl, syncEngine, startFlushTimer, stopFlushTimer, resetToIdle, onSyncComplete],
   );
 
   const dismissError = useCallback(() => {
@@ -360,6 +365,8 @@ export function useSync(onSyncComplete?: (cl: string | null) => void) {
     stepStatuses,
     targetCl,
     setTargetCl,
+    syncEngine,
+    setSyncEngine,
     stepDescriptions,
     progress,
     logLines,

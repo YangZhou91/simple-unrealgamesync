@@ -207,6 +207,8 @@ function App() {
             selectedWorkspace={workspaces.selectedWorkspace}
             targetCl={sync.targetCl}
             onTargetClChange={sync.setTargetCl}
+            syncEngine={sync.syncEngine}
+            onSyncEngineChange={sync.setSyncEngine}
             stepDescriptions={sync.stepDescriptions}
             onStartSync={handleStartSync}
             onStopSync={sync.stopSync}

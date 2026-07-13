@@ -28,11 +28,13 @@ export function startSync(
   workspaceId: string,
   onEvent: Channel<SyncEvent>,
   targetCl?: string,
+  includeEngine: boolean = false,
 ): Promise<void> {
   return invoke("start_sync", {
     workspaceId,
     onEvent,
     targetCl: targetCl || null,
+    includeEngine,
   });
 }
 
@@ -57,12 +59,14 @@ export function retryStep(
   step: string,
   onEvent: Channel<SyncEvent>,
   targetCl?: string,
+  includeEngine: boolean = false,
 ): Promise<void> {
   return invoke("retry_step", {
     workspaceId,
     step,
     onEvent,
     targetCl: targetCl || null,
+    includeEngine,
   });
 }
 
