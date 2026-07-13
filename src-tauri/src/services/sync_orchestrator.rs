@@ -207,7 +207,7 @@ impl SyncOrchestrator {
         // Only runs when an explicit changelist is provided. An empty changelist
         // means a lightweight project-only update — skip the Engine force sync
         // entirely (and emit no forceSync events) per FORCESYNC-COND-01.
-        if target_cl.is_some() {
+        if should_force_sync_engine(target_cl.as_deref(), include_engine) {
             let step = StepScope::new("forceSync");
             let force_cancel = CancellationToken::new();
             self.process_manager
@@ -219,7 +219,7 @@ impl SyncOrchestrator {
             self.process_manager.clear_tracked().await;
             step.done("");
         } else {
-            info!("[sync] step=forceSync skipped (no target changelist)");
+            info!("[sync] step=forceSync skipped (no target changelist, or engine opt-out)");
         }
 
         // Step 4: GenerateProjectFiles
@@ -596,16 +596,22 @@ impl SyncOrchestrator {
                 }
             }
             "forceSync" => {
-                let s = StepScope::new("forceSync");
-                let cancel_token = CancellationToken::new();
-                self.process_manager
-                    .set_cancel_token(cancel_token.clone())
-                    .await;
-                let _ = self
-                    .force_sync_engine_step(&workspace, &channel, cancel_token, &app)
-                    .await;
-                self.process_manager.clear_tracked().await;
-                s.done("");
+                // Mirror the run_pipeline gate (quick-260713-kx6): if the engine
+                // was opted out, force-sync is a no-op even on explicit retry.
+                if !should_force_sync_engine(target_cl.as_deref(), include_engine) {
+                    info!("[sync] step=forceSync skipped on retry (no target changelist, or engine opt-out)");
+                } else {
+                    let s = StepScope::new("forceSync");
+                    let cancel_token = CancellationToken::new();
+                    self.process_manager
+                        .set_cancel_token(cancel_token.clone())
+                        .await;
+                    let _ = self
+                        .force_sync_engine_step(&workspace, &channel, cancel_token, &app)
+                        .await;
+                    self.process_manager.clear_tracked().await;
+                    s.done("");
+                }
             }
             _ => return Err(AppError::Process(format!("Unknown step: {}", step))),
         }
@@ -1078,9 +1084,36 @@ pub fn is_known_step(step: &str) -> bool {
     )
 }
 
+/// Whether the Engine force-sync step should run. Mirrors the normal-sync
+/// engine gate in `p4_executor::build_p4_sync_args`
+/// (`workspace_root_scope = target_cl.is_some() && options.include_engine`):
+/// the engine is touched only when BOTH a Target CL is set AND the user opted
+/// into syncing the engine. Rollback constructs `include_engine: true`, so it
+/// always qualifies. When false, the engine's git-tracked source is left
+/// untouched so the post-sync `git pull` of UnrealEngine stays clean
+/// (quick-260713-kx6 — previously force-sync ran on `target_cl.is_some()`
+/// alone, undoing the normal-sync opt-out).
+pub fn should_force_sync_engine(target_cl: Option<&str>, include_engine: bool) -> bool {
+    target_cl.is_some() && include_engine
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_should_force_sync_engine() {
+        // No Target CL → never force-sync (normal HEAD sync unchanged).
+        assert!(!should_force_sync_engine(None, true));
+        assert!(!should_force_sync_engine(None, false));
+        // Target CL + engine opt-out → SKIP. This is the regression the helper
+        // exists for: force-sync used to run whenever target_cl.is_some(),
+        // undoing the normal-sync opt-out and re-overwriting git-tracked engine
+        // source (the git-pull stash-pop conflict the toggle is meant to avoid).
+        assert!(!should_force_sync_engine(Some("12345"), false));
+        // Target CL + opt-in → force-sync runs (pins engine source to the CL).
+        assert!(should_force_sync_engine(Some("12345"), true));
+    }
 
     #[test]
     fn test_is_known_step_all_valid() {
