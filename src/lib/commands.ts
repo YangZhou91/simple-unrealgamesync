@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { Channel } from "@tauri-apps/api/core";
-import type { WorkspaceConfig, SyncEvent, HistoryRecord, ChangelistEntry, GitBranchInfo, P4BehindInfo } from "@/lib/types";
+import type { WorkspaceConfig, SyncEvent, HistoryRecord, ChangelistEntry, GitBranchInfo, P4BehindInfo, WorkspaceHealthReport } from "@/lib/types";
 
 export function addWorkspace(
   name: string,
@@ -90,6 +90,11 @@ export function checkSyncBehind(workspaceId: string): Promise<P4BehindInfo> {
 
 export function cancelSyncBehind(): Promise<void> {
   return invoke("cancel_sync_behind");
+}
+
+// quick-260713-s44: read-only workspace-health audit (p4 reconcile -n + where)
+export function checkWorkspaceHealth(workspaceId: string): Promise<WorkspaceHealthReport> {
+  return invoke("check_workspace_health", { workspaceId });
 }
 
 export function validateExclusions(

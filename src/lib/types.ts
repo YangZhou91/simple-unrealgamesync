@@ -17,6 +17,24 @@ export interface P4BehindInfo {
   behind: number;
 }
 
+// quick-260713-s44: workspace-health audit types (read-only p4 reconcile + where)
+export type WorkspaceHealthCategory =
+  | "unmapped"
+  | "missing-on-disk"
+  | "not-in-depot"
+  | "differs";
+
+export interface WorkspaceHealthCategoryGroup {
+  category: WorkspaceHealthCategory;
+  count: number;
+  paths: string[];
+}
+
+export interface WorkspaceHealthReport {
+  categories: WorkspaceHealthCategoryGroup[];
+  stream: string | null;
+}
+
 export type SyncEvent =
   | { event: "stepStarted"; data: { step: string; description: string } }
   | { event: "stepCompleted"; data: { step: string; success: boolean } }

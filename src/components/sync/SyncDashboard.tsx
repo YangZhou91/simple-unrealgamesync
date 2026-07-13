@@ -3,6 +3,7 @@ import { IdlePanel } from "./IdlePanel";
 import { RunningPanel } from "./RunningPanel";
 import { ErrorPanel } from "./ErrorPanel";
 import { GitRunningPanel } from "./GitRunningPanel";
+import { WorkspaceHealthPanel } from "./WorkspaceHealthPanel";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { HistoryTab } from "@/components/history/HistoryTab";
 import type { WorkspaceConfig } from "@/lib/types";
@@ -105,6 +106,9 @@ export function SyncDashboard({
         <TabsTrigger value="history" className="px-4">
           History
         </TabsTrigger>
+        <TabsTrigger value="health" className="px-4">
+          健康 / Health
+        </TabsTrigger>
       </TabsList>
 
       <TabsContent value="sync" className="flex-1 overflow-hidden" tabIndex={-1}>
@@ -173,6 +177,12 @@ export function SyncDashboard({
           records={historyRecords}
           isLoading={historyLoading}
         />
+      </TabsContent>
+
+      {/* quick-260713-s44: read-only workspace-health audit tab. The panel owns
+          its own state via useWorkspaceHealth (on-demand, decoupled from sync). */}
+      <TabsContent value="health" className="flex-1 overflow-hidden" tabIndex={-1}>
+        <WorkspaceHealthPanel workspaceId={selectedWorkspace?.id ?? null} />
       </TabsContent>
     </Tabs>
   );
