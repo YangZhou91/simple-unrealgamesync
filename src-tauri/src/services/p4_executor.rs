@@ -1768,6 +1768,7 @@ Server network estimates: files added/updated/deleted=0/0/0, bytes added/updated
             target_cl: None,
             parallel_threads: 1,
             exclusions: vec![],
+            include_engine: false,
         };
         let args = build_p4_sync_args(&options, "E:\\test", "MyGame", &None);
         assert_eq!(args, vec!["sync", "//..."]);
@@ -2002,6 +2003,7 @@ Server network estimates: files added/updated/deleted=0/0/0, bytes added/updated
             target_cl: Some("99999".to_string()),
             parallel_threads: 4,
             exclusions: vec!["Binaries".to_string()],
+            include_engine: true,
         };
         let args = build_p4_sync_args(&options, tmp_dir.to_str().unwrap(), "MyGame", &options.target_cl);
 
@@ -2018,6 +2020,82 @@ Server network estimates: files added/updated/deleted=0/0/0, bytes added/updated
             .any(|a| a.contains("UnrealEngine") && a.contains("@99999")));
         // Should NOT include Engine/Binaries
         assert!(!args.iter().any(|a| a.contains("Engine/Binaries")));
+
+        let _ = fs::remove_dir_all(&tmp_dir);
+    }
+
+    // --- New tests for include_engine opt-out (quick-260713-kx6) ---
+    //
+    // Proves the :306 gate: a Target CL sync with `include_engine: false` skips
+    // all `UnrealEngine/...` paths (so the subsequent `git pull` of UnrealEngine
+    // stays clean), while the project subtree is still synced to the target CL.
+    // The companion test proves the gate still admits engine paths when ON.
+
+    #[test]
+    fn test_build_p4_sync_args_with_cl_no_engine() {
+        // Layout mirrors the real workspace: project under UnrealEngine/<project>,
+        // plus Engine source under UnrealEngine/Engine.
+        let tmp_dir = std::env::temp_dir().join("p4_test_args_cl_no_engine");
+        let ue_dir = tmp_dir.join("UnrealEngine");
+        let project_dir = ue_dir.join("FYGame");
+        let _ = fs::remove_dir_all(&tmp_dir);
+        fs::create_dir_all(project_dir.join("Content")).unwrap();
+        fs::create_dir_all(project_dir.join("Binaries")).unwrap();
+        fs::create_dir_all(ue_dir.join("Engine/Source")).unwrap();
+        fs::create_dir_all(ue_dir.join("Engine/Shaders")).unwrap();
+
+        // include_engine: false → the engine block MUST be skipped.
+        let options = SyncOptions {
+            target_cl: Some("12345".to_string()),
+            parallel_threads: 1,
+            exclusions: vec![],
+            include_engine: false,
+        };
+        let args = build_p4_sync_args(&options, tmp_dir.to_str().unwrap(), "FYGame", &options.target_cl);
+
+        // (A) Project subtree IS synced to the target CL.
+        assert!(
+            args.iter().any(|a| a.contains("FYGame") && a.contains("@12345")),
+            "project subtree must be synced to CL; got {:?}",
+            args
+        );
+        // (B) CORE: NO UnrealEngine path appears anywhere in the args. This is
+        // the opt-out — the engine source is left untouched so `git pull` of
+        // UnrealEngine stays clean.
+        assert!(
+            !args.iter().any(|a| a.contains("UnrealEngine")),
+            "UnrealEngine paths must be absent when include_engine=false; got {:?}",
+            args
+        );
+
+        let _ = fs::remove_dir_all(&tmp_dir);
+    }
+
+    #[test]
+    fn test_build_p4_sync_args_with_cl_engine_on() {
+        let tmp_dir = std::env::temp_dir().join("p4_test_args_cl_engine_on");
+        let ue_dir = tmp_dir.join("UnrealEngine");
+        let project_dir = ue_dir.join("FYGame");
+        let _ = fs::remove_dir_all(&tmp_dir);
+        fs::create_dir_all(project_dir.join("Content")).unwrap();
+        fs::create_dir_all(project_dir.join("Binaries")).unwrap();
+        fs::create_dir_all(ue_dir.join("Engine/Source")).unwrap();
+        fs::create_dir_all(ue_dir.join("Engine/Shaders")).unwrap();
+
+        // include_engine: true → engine block IS admitted, pinned to the CL.
+        let options = SyncOptions {
+            target_cl: Some("12345".to_string()),
+            parallel_threads: 1,
+            exclusions: vec![],
+            include_engine: true,
+        };
+        let args = build_p4_sync_args(&options, tmp_dir.to_str().unwrap(), "FYGame", &options.target_cl);
+
+        assert!(
+            args.iter().any(|a| a.contains("UnrealEngine") && a.contains("@12345")),
+            "UnrealEngine paths must be present (pinned to CL) when include_engine=true; got {:?}",
+            args
+        );
 
         let _ = fs::remove_dir_all(&tmp_dir);
     }
