@@ -71,6 +71,7 @@ pub fn run() {
             commands::sync::stop_sync,
             commands::sync::check_sync_behind,
             commands::sync::cancel_sync_behind,
+            commands::sync::check_workspace_health,
             commands::sync::get_current_cl,
             commands::sync::get_workspace_stream,
             commands::sync::is_sync_running,

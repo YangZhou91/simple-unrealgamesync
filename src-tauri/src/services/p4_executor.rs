@@ -4,6 +4,7 @@ use crate::services::disk_usage_sampler::DiskUsageSampler;
 use crate::services::process_manager::ProcessManager;
 use crate::utils::counting_channel::CountingChannel;
 use crate::utils::log::{render_cancelled_line, render_exited_line, render_spawned_line, scope_run_with, RUN_ID, StepScope};
+use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::process::Stdio;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -1525,6 +1526,288 @@ impl P4Executor {
         let stdout = String::from_utf8_lossy(&output.stdout);
         Ok(parse_changelists(&stdout))
     }
+
+    /// quick-260713-s44: Read-only workspace-health audit. Spawns the 2-command
+    /// p4 sequence (`p4 reconcile -n -l -I <whitelist>` + `p4 where <whitelist>`)
+    /// over the FIXED Config/Source/.uproject whitelist and returns a categorized
+    /// report of ALL files with abnormal p4 status.
+    ///
+    /// reconcile surfaces not-in-depot + missing-on-disk + differs in one pass;
+    /// `p4 where` surfaces unmapped (the stream-switch orphan case) — reconcile
+    /// only processes View-mapped paths, so unmapped needs the 2nd command.
+    ///
+    /// Best-effort + non-fatal: a p4 error on one path does NOT blank the report
+    /// (T-s44-03). 120s timeout per command + CancellationToken via tokio::select!
+    /// (mirrors dry_run_sync). The `audit_workspace` spawn+drain is NOT unit-
+    /// tested (requires a live p4 server) — its correctness is exercised by the
+    /// Task 3 human-verify checkpoint against the real FYGame workspace.
+    pub async fn audit_workspace(
+        &self,
+        workspace: &WorkspaceConfig,
+        cancel: CancellationToken,
+    ) -> Result<WorkspaceHealthReport, AppError> {
+        // D-14: the audit is its own `step=audit` StepScope — Drop guarantees a
+        // terminal `done`/`failed`/`cancelled`/`dropped` line on every path.
+        let _audit_scope = StepScope::new("audit");
+
+        // Build the FIXED 3-entry whitelist (Config/..., Source/..., .uproject).
+        let whitelist = build_audit_whitelist_args(&workspace.root_path, &workspace.project_dir);
+        let whitelist_refs: Vec<&str> = whitelist.iter().map(|s| s.as_str()).collect();
+
+        // 4-category buckets, populated from both commands. The report always
+        // emits all 4 in WorkspaceHealthCategory::ALL order (empty Vec if none).
+        // The reconcile read task OWNS the 3 reconcile buckets and returns them
+        // (mirrors dry_run_sync's read_task returning count) so the spawn's
+        // `async move` doesn't move them out of this scope. The where read task
+        // likewise owns + returns the unmapped bucket.
+
+        // --- (1) p4 reconcile -n -l -I <whitelist> ---
+        // -n = preview (no mutations), -l = local-syntax paths, -I = ignore
+        // P4IGNORE checking (NOT the sync -I progress flag — do NOT conflate).
+        let reconcile_args: Vec<&str> = {
+            let mut v = vec!["reconcile", "-n", "-l", "-I"];
+            v.extend(whitelist_refs.iter().copied());
+            v
+        };
+        let mut reconcile_cmd = self.build_p4_command(workspace, &reconcile_args);
+        let mut reconcile_child = spawn_with_retry(
+            reconcile_cmd
+                .stdout(Stdio::piped())
+                .stderr(Stdio::null()),
+        )
+        .await
+        .map_err(AppError::ProcessSpawn)?;
+
+        let reconcile_pid = reconcile_child.id().unwrap_or(0);
+        let reconcile_start = std::time::Instant::now();
+        info!(
+            "{}",
+            render_spawned_line(
+                reconcile_pid,
+                &workspace.root_path,
+                &reconcile_args.join(" ")
+            )
+        );
+
+        // The reconcile read task OWNS the 3 reconcile buckets and returns them
+        // as a tuple so they aren't moved out of this scope prematurely.
+        let reconcile_stdout = reconcile_child.stdout.take();
+        let reconcile_read_task = if let Some(stdout) = reconcile_stdout {
+            let reader = BufReader::new(stdout);
+            tokio::spawn(async move {
+                let mut lines = reader.lines();
+                let mut not_in_depot: Vec<String> = Vec::new();
+                let mut missing_on_disk: Vec<String> = Vec::new();
+                let mut differs: Vec<String> = Vec::new();
+                while let Ok(Some(line)) = lines.next_line().await {
+                    if let Some((category, path)) = parse_reconcile_line(&line) {
+                        match category {
+                            WorkspaceHealthCategory::NotInDepot => {
+                                // Filter generated artifacts (Intermediate/Binaries/Saved/.sln)
+                                // so the list isn't noisy (CONTEXT .p4ignore-strategy discretion).
+                                if !is_ignored_generated(&path) {
+                                    not_in_depot.push(path);
+                                }
+                            }
+                            WorkspaceHealthCategory::MissingOnDisk => {
+                                missing_on_disk.push(path);
+                            }
+                            WorkspaceHealthCategory::Differs => {
+                                differs.push(path);
+                            }
+                            // Unmapped is NOT a reconcile category; skip defensively.
+                            WorkspaceHealthCategory::Unmapped => {}
+                        }
+                    }
+                }
+                (not_in_depot, missing_on_disk, differs)
+            })
+        } else {
+            tokio::spawn(async {
+                (Vec::<String>::new(), Vec::<String>::new(), Vec::<String>::new())
+            })
+        };
+
+        // 120s timeout + cancel for reconcile (mirrors dry_run_sync).
+        let reconcile_outcome: Result<(), AppError> = tokio::select! {
+            result = tokio::time::timeout(
+                std::time::Duration::from_secs(120),
+                reconcile_child.wait(),
+            ) => {
+                match result {
+                    Ok(status) => {
+                        let status = status.map_err(AppError::ProcessSpawn)?;
+                        info!(
+                            "{}",
+                            render_exited_line(
+                                reconcile_pid,
+                                status.code(),
+                                reconcile_start.elapsed().as_millis()
+                            )
+                        );
+                        if !status.success() {
+                            warn!("[audit] reconcile non-success status; returning partial report");
+                        }
+                        Ok(())
+                    }
+                    Err(_) => {
+                        // Timeout — the child is still running; we can't take its
+                        // stdout back, so abandon the read task and let it drop.
+                        // (The partial report from lines read before timeout is
+                        // already collected; we just lose the tail.)
+                        warn!("[audit] reconcile timed out after 120s, returning partial report");
+                        info!(
+                            "{}",
+                            render_exited_line(
+                                reconcile_pid,
+                                None,
+                                reconcile_start.elapsed().as_millis()
+                            )
+                        );
+                        Ok(())
+                    }
+                }
+            }
+            _ = cancel.cancelled() => {
+                warn!("[audit] cancelled by user during reconcile");
+                _audit_scope.cancelled();
+                return Err(AppError::Cancelled);
+            }
+        };
+        let (not_in_depot, missing_on_disk, differs) = reconcile_read_task.await.unwrap_or_default();
+        reconcile_outcome?;
+
+        // --- (2) p4 where <whitelist> ---
+        // Surfaces unmapped files (the stream-switch orphan case). `p4 where`
+        // returns "depot client local" for mapped, "- <path> - file(s) not in
+        // client view." for unmapped. Accepts wildcards, so the whitelist is
+        // bulk-friendly.
+        let where_args: Vec<&str> = {
+            let mut v = vec!["where"];
+            v.extend(whitelist_refs.iter().copied());
+            v
+        };
+        let mut where_cmd = self.build_p4_command(workspace, &where_args);
+        let mut where_child = spawn_with_retry(
+            where_cmd
+                .stdout(Stdio::piped())
+                .stderr(Stdio::null()),
+        )
+        .await
+        .map_err(AppError::ProcessSpawn)?;
+
+        let where_pid = where_child.id().unwrap_or(0);
+        let where_start = std::time::Instant::now();
+        info!(
+            "{}",
+            render_spawned_line(
+                where_pid,
+                &workspace.root_path,
+                &where_args.join(" ")
+            )
+        );
+
+        let where_stdout = where_child.stdout.take();
+        let where_read_task = if let Some(stdout) = where_stdout {
+            let reader = BufReader::new(stdout);
+            tokio::spawn(async move {
+                let mut lines = reader.lines();
+                let mut unmapped: Vec<String> = Vec::new();
+                while let Ok(Some(line)) = lines.next_line().await {
+                    if let Some((is_mapped, path)) = parse_where_line(&line) {
+                        if !is_mapped {
+                            unmapped.push(path);
+                        }
+                        // Mapped lines are skipped (they're the normal case).
+                    }
+                }
+                unmapped
+            })
+        } else {
+            tokio::spawn(async { Vec::<String>::new() })
+        };
+
+        let where_outcome: Result<(), AppError> = tokio::select! {
+            result = tokio::time::timeout(
+                std::time::Duration::from_secs(120),
+                where_child.wait(),
+            ) => {
+                match result {
+                    Ok(status) => {
+                        let status = status.map_err(AppError::ProcessSpawn)?;
+                        info!(
+                            "{}",
+                            render_exited_line(
+                                where_pid,
+                                status.code(),
+                                where_start.elapsed().as_millis()
+                            )
+                        );
+                        if !status.success() {
+                            warn!("[audit] where non-success status; returning partial report");
+                        }
+                        Ok(())
+                    }
+                    Err(_) => {
+                        warn!("[audit] where timed out after 120s, returning partial report");
+                        info!(
+                            "{}",
+                            render_exited_line(
+                                where_pid,
+                                None,
+                                where_start.elapsed().as_millis()
+                            )
+                        );
+                        Ok(())
+                    }
+                }
+            }
+            _ = cancel.cancelled() => {
+                warn!("[audit] cancelled by user during where");
+                _audit_scope.cancelled();
+                return Err(AppError::Cancelled);
+            }
+        };
+        let unmapped = where_read_task.await.unwrap_or_default();
+        where_outcome?;
+
+        // Diagnostic: the bound p4 stream (context for WHY files are unmapped).
+        // Non-fatal — get_client_stream returns Ok(None) on p4 failure.
+        let stream = self
+            .get_client_stream(workspace)
+            .await
+            .unwrap_or(None);
+
+        // Assemble the report in the fixed WorkspaceHealthCategory::ALL order.
+        // Move each bucket into its category group (empty Vec if none found).
+        let categories: Vec<WorkspaceHealthCategoryGroup> = WorkspaceHealthCategory::ALL
+            .iter()
+            .map(|cat| {
+                let paths = match cat {
+                    WorkspaceHealthCategory::Unmapped => unmapped.clone(),
+                    WorkspaceHealthCategory::MissingOnDisk => missing_on_disk.clone(),
+                    WorkspaceHealthCategory::NotInDepot => not_in_depot.clone(),
+                    WorkspaceHealthCategory::Differs => differs.clone(),
+                };
+                let count = paths.len();
+                WorkspaceHealthCategoryGroup {
+                    category: *cat,
+                    count,
+                    paths,
+                }
+            })
+            .collect();
+
+        _audit_scope.done(&format!(
+            "unmapped={} missing={} notindepot={} differs={}",
+            categories[0].count,
+            categories[1].count,
+            categories[2].count,
+            categories[3].count,
+        ));
+
+        Ok(WorkspaceHealthReport { categories, stream })
+    }
 }
 
 fn parse_sync_file_count(line: &str) -> u64 {
@@ -1642,6 +1925,300 @@ pub fn parse_changelists(output: &str) -> Vec<ChangelistEntry> {
     entries
 }
 
+// ========================================================================
+// quick-260713-s44: workspace-health audit (read-only p4 reconcile + where)
+// ========================================================================
+//
+// Surfaces ALL files with abnormal p4 status in the FYGame structural
+// whitelist (Config/ + Source/ + <project>.uproject), grouped into 4
+// categories. Motivated by FY.Uproject showing "not in current workspace
+// mapping" after a stream switch stranded files from the prior stream.
+//
+// TWO p4 commands cover all 4 categories (CONTEXT D-mechanism):
+//   (1) `p4 reconcile -n -l -I <whitelist>` -> not-in-depot + missing-on-disk + differs
+//   (2) `p4 where <whitelist>`              -> unmapped
+// reconcile's `-I` means "ignore P4IGNORE checking" — NOT the sync command's
+// `-I` global-progress flag. Do NOT conflate. reconcile does NOT surface
+// unmapped files (it only processes View-mapped paths); that's WHY `p4 where`
+// is the 2nd command.
+
+/// The 4 abnormal-status categories surfaced by the workspace-health audit.
+/// Serialized as snake_case strings across the Tauri IPC boundary.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
+pub enum WorkspaceHealthCategory {
+    /// Not in the client View (stream-switch orphan). Detected via `p4 where`.
+    #[serde(rename = "unmapped")]
+    Unmapped,
+    /// In depot + have-list, but deleted from disk outside p4. reconcile "deleted".
+    #[serde(rename = "missing-on-disk")]
+    MissingOnDisk,
+    /// On disk, not tracked by depot (would need `p4 add`). reconcile "added".
+    #[serde(rename = "not-in-depot")]
+    NotInDepot,
+    /// Locally modified vs the depot revision. reconcile "edited"/"editing".
+    #[serde(rename = "differs")]
+    Differs,
+}
+
+impl WorkspaceHealthCategory {
+    /// Stable display order: unmapped (the motivating case) first, then the 3
+    /// reconcile categories. The report always emits all 4 entries in this order
+    /// (empty Vec if none found — not omitted).
+    pub const ALL: [WorkspaceHealthCategory; 4] = [
+        WorkspaceHealthCategory::Unmapped,
+        WorkspaceHealthCategory::MissingOnDisk,
+        WorkspaceHealthCategory::NotInDepot,
+        WorkspaceHealthCategory::Differs,
+    ];
+}
+
+/// One category group in the audit report: the category, the count, and the
+/// project-relative paths. Paths are display-only strings (never executed).
+#[derive(Clone, Serialize, Deserialize)]
+pub struct WorkspaceHealthCategoryGroup {
+    pub category: WorkspaceHealthCategory,
+    pub count: usize,
+    pub paths: Vec<String>,
+}
+
+/// The full audit report. `stream` is the bound p4 stream (diagnostic context
+/// for WHY files are unmapped); None on classic clients or p4 failure.
+#[derive(Clone, Serialize, Deserialize)]
+pub struct WorkspaceHealthReport {
+    pub categories: Vec<WorkspaceHealthCategoryGroup>,
+    pub stream: Option<String>,
+}
+
+/// `p4 reconcile -n -l` action markers, in the order reconcile emits them.
+/// Match the longer "added as"/"deleted as"/"editing" forms first so the
+/// shorter "add"/"delete"/"edit" arms only fire on the bare-summary variants.
+/// The "edited" marker has NO trailing space so it also matches the
+/// "edited, also opened" form (reconcile -n edit arm).
+const RECONCILE_MARKERS_NOT_IN_DEPOT: &[&str] = &[" - added as ", " - add "];
+const RECONCILE_MARKERS_MISSING_ON_DISK: &[&str] = &[" - deleted as ", " - delete "];
+const RECONCILE_MARKERS_DIFFERS: &[&str] = &[" - editing ", " - edited", " - edit "];
+
+/// Parse one `p4 reconcile -n -l` stdout line into (category, project-relative path).
+///
+/// Returns None for summary/info lines (`... file(s) up-to-date.`, empty, or
+/// any line without a recognized action marker). Paths are display-only.
+///
+/// The depot path is the token BEFORE the action marker (e.g.
+/// `//depot/FYGame/Config/DefaultEngine.ini#1 - added as D:\\...`). The
+/// project-relative display path is extracted by finding the structural
+/// whitelist segment (`/Config/`, `/Source/`, or the `<project>.uproject`
+/// filename) and taking from there — the audit ONLY scans Config/Source/.uproject,
+/// so every categorized line MUST contain one of these.
+///
+/// T-s44-01: pure parser, returns Option, no unwrap on parsed paths — a
+/// malformed p4 line cannot panic the drain.
+pub fn parse_reconcile_line(line: &str) -> Option<(WorkspaceHealthCategory, String)> {
+    let line = line.trim();
+    if line.is_empty() {
+        return None;
+    }
+
+    // Try each marker family. The depot path is BEFORE the marker.
+    let (category, marker_idx) = if let Some(idx) =
+        RECONCILE_MARKERS_NOT_IN_DEPOT
+            .iter()
+            .find_map(|m| line.find(m).map(|i| (m, i)))
+    {
+        let (_, i) = idx;
+        (WorkspaceHealthCategory::NotInDepot, i)
+    } else if let Some((_, i)) = RECONCILE_MARKERS_MISSING_ON_DISK
+        .iter()
+        .find_map(|m| line.find(m).map(|i| (m, i)))
+    {
+        (WorkspaceHealthCategory::MissingOnDisk, i)
+    } else if let Some((_, i)) = RECONCILE_MARKERS_DIFFERS
+        .iter()
+        .find_map(|m| line.find(m).map(|i| (m, i)))
+    {
+        (WorkspaceHealthCategory::Differs, i)
+    } else {
+        return None;
+    };
+
+    let depot_part = &line[..marker_idx];
+    Some((category, extract_whitelist_relative_path(depot_part)))
+}
+
+/// Extract the project-relative display path from a depot or local path by
+/// finding the structural whitelist segment (`Config/`, `Source/`, or the
+/// `<project>.uproject` filename) and taking from there. The audit whitelist
+/// is EXACTLY Config/Source/.uproject, so every categorized path contains one
+/// of these. Falls back to the filename if no structural segment is found
+/// (defensive — should not happen for real reconcile output).
+fn extract_whitelist_relative_path(path: &str) -> String {
+    let normalized = path.replace('\\', "/");
+    // Drop any trailing "#rev" depot revision glue.
+    let no_rev = normalized
+        .rsplit_once('#')
+        .map(|(p, _)| p)
+        .unwrap_or(&normalized);
+
+    // Find the Config/ or Source/ segment (the whitelist subtrees). Take from
+    // the segment onward (e.g. "...FYGame/Config/DefaultEngine.ini" -> "Config/DefaultEngine.ini").
+    for seg in &["Config/", "Source/"] {
+        if let Some(idx) = no_rev.find(seg) {
+            return no_rev[idx..].to_string();
+        }
+    }
+    // .uproject descriptor file — return the last two segments
+    // ("<project>/<project>.uproject") so the project context is preserved
+    // (e.g. "//FYDepot/FYGame/FYGame.uproject" -> "FYGame/FYGame.uproject").
+    if no_rev.to_lowercase().ends_with(".uproject") {
+        // rsplitn(3, '/') yields [filename, project_seg, ...rest] in reverse
+        // order: parts[0]=filename, parts[1]=project_seg, parts[2]=rest.
+        let parts: Vec<&str> = no_rev.rsplitn(3, '/').collect();
+        return match parts.len() {
+            1 => parts[0].to_string(),
+            _ => format!("{}/{}", parts[1], parts[0]),
+        };
+    }
+    // Defensive fallback: last path segment.
+    no_rev
+        .rsplit_once('/')
+        .map(|(_, name)| name)
+        .unwrap_or(no_rev)
+        .to_string()
+}
+
+/// Parse one `p4 where` stdout line into (is_mapped, project-relative path).
+///
+/// - Mapped: 3 whitespace-separated path-like tokens (`depot client local`) -> Some((true, path))
+/// - Unmapped: `- <path> - file(s) not in client view.` -> Some((false, path))
+/// - Other (info/summary lines): None
+///
+/// The unmapped path is extracted from the leading `- <path> -` token. The
+/// mapped path is derived from the depot (1st) token via the whitelist-relative
+/// extractor (the .uproject unmapped case surfaces as just the filename).
+pub fn parse_where_line(line: &str) -> Option<(bool, String)> {
+    let line = line.trim();
+    if line.is_empty() {
+        return None;
+    }
+
+    // Unmapped: "- //depot/path - file(s) not in client view."
+    // The leading "-" + surrounding " - " delimiters identify the unmapped form.
+    // Guard against the bare summary "... file(s) not in client view." (no leading
+    // "- <path> -") by requiring the "- <token> -" shape.
+    if line.contains("file(s) not in client view") {
+        // Strip the leading "- " if present.
+        let after_dash = line.strip_prefix("- ").unwrap_or(line);
+        // The path is everything up to the next " -" delimiter.
+        let path = after_dash
+            .split(" -")
+            .next()
+            .unwrap_or("")
+            .trim();
+        if path.is_empty() || path.starts_with("...") {
+            // Summary line "... file(s) not in client view." (no path) -> None.
+            return None;
+        }
+        return Some((false, extract_whitelist_relative_path(path)));
+    }
+
+    // Mapped: "depot client local" — 3 whitespace-separated path tokens.
+    // p4 where emits exactly 3 space-separated paths for a mapped file.
+    let tokens: Vec<&str> = line.split_whitespace().collect();
+    if tokens.len() == 3 {
+        // The depot path (1st token) is the canonical path; extract the
+        // whitelist-relative portion (Config/..., Source/..., or .uproject).
+        let depot = tokens[0];
+        // Reject obviously non-path tokens (defensive — a stray info line with
+        // 3 tokens shouldn't match, but the depot token must look like a path).
+        if depot.contains('/') || depot.contains('\\') {
+            return Some((true, extract_whitelist_relative_path(depot)));
+        }
+    }
+
+    None
+}
+
+/// Hardcoded predicate for UE-generated subtrees + IDE files. Applied ONLY to
+/// not-in-depot results (the noisy category) so the list isn't dominated by
+/// generated artifacts the user can't act on (CONTEXT .p4ignore-strategy
+/// discretion: hardcode well-known UE patterns rather than depend on a
+/// .p4ignore file that may not exist / is p4-version-dependent).
+///
+/// Source/Config/.uproject content is NEVER filtered (Source is in-scope).
+pub fn is_ignored_generated(rel_path: &str) -> bool {
+    let normalized = rel_path.replace('\\', "/");
+    let lower = normalized.to_lowercase();
+
+    // UE-generated subtrees (prefix match on a path segment). Lowercase to
+    // match the lowercased input.
+    const GENERATED_PREFIXES: &[&str] = &[
+        "intermediate/",
+        "binaries/",
+        "saved/",
+        ".vs/",
+        "build/",
+    ];
+    if GENERATED_PREFIXES
+        .iter()
+        .any(|p| lower.starts_with(p))
+    {
+        return true;
+    }
+
+    // IDE / project-file suffixes (filename match, any directory).
+    const GENERATED_SUFFIXES: &[&str] = &[
+        ".sln",
+        ".suo",
+        ".user",
+        ".vcxproj",
+        ".vcxproj.filters",
+    ];
+    if GENERATED_SUFFIXES
+        .iter()
+        .any(|s| lower.ends_with(s))
+    {
+        return true;
+    }
+
+    false
+}
+
+/// Build the FIXED 3-entry depot-syntax whitelist for the audit
+/// (Config/..., Source/..., <project>.uproject) per D-scope. Resolves the
+/// project path the SAME way as `resolve_non_excluded_paths` (try
+/// root/UnrealEngine/<project>, then root/<project>), then builds the 3
+/// entries. Does NOT honor exclusions — the audit wants a fixed whitelist
+/// regardless of the sync-exclude list (D-scope: whitelist, not exclude list).
+pub fn build_audit_whitelist_args(root_path: &str, project_dir: &str) -> Vec<String> {
+    let root = Path::new(root_path);
+    let project_candidates = [
+        root.join(format!("UnrealEngine/{}", project_dir)),
+        root.join(project_dir),
+    ];
+    let default_path = root.join(project_dir);
+    let project_path = project_candidates
+        .iter()
+        .find(|p| {
+            p.exists()
+                && std::fs::read_dir(p)
+                    .map(|mut d| d.next().is_some())
+                    .unwrap_or(false)
+        })
+        .unwrap_or(&default_path);
+
+    // Build the relative project prefix (e.g. "FYGame" or "UnrealEngine/FYGame").
+    let project_rel = project_path
+        .strip_prefix(root)
+        .unwrap_or(Path::new(project_dir))
+        .to_string_lossy()
+        .replace('\\', "/");
+
+    vec![
+        format!("{}/Config/...", project_rel),
+        format!("{}/Source/...", project_rel),
+        format!("{}/{}.uproject", project_rel, project_dir),
+    ]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1756,6 +2333,170 @@ Server network estimates: files added/updated/deleted=0/0/0, bytes added/updated
 Server network estimates: files added/updated/deleted=0/0/0, bytes added/updated=0/1000
 ";
         assert_eq!(Some(1000), parse_sync_n_total_bytes(stdout));
+    }
+
+    // --- quick-260713-s44: workspace-health audit pure-parser tests (RED) ---
+    // The audit_workspace spawn+drain is NOT unit-tested (requires a live p4
+    // server) — these pin the pure parsers that classify reconcile/where output.
+
+    #[test]
+    fn test_parse_reconcile_line_added_as() {
+        // `reconcile -n -l` "added as" -> not-in-depot (file on disk, not tracked)
+        let r = parse_reconcile_line(
+            "//depot/FYGame/Config/DefaultEngine.ini#1 - added as D:\\FYDepot\\FYGame\\Config\\DefaultEngine.ini",
+        );
+        assert_eq!(r, Some((WorkspaceHealthCategory::NotInDepot, "Config/DefaultEngine.ini".to_string())));
+    }
+
+    #[test]
+    fn test_parse_reconcile_line_deleted_as() {
+        // "deleted as" -> missing-on-disk (in depot + have-list, deleted from disk)
+        let r = parse_reconcile_line(
+            "//depot/FYGame/Source/Foo.cpp#3 - deleted as D:\\FYDepot\\FYGame\\Source\\Foo.cpp",
+        );
+        assert_eq!(r, Some((WorkspaceHealthCategory::MissingOnDisk, "Source/Foo.cpp".to_string())));
+    }
+
+    #[test]
+    fn test_parse_reconcile_line_editing() {
+        // "editing" -> differs (locally modified vs depot revision)
+        let r = parse_reconcile_line(
+            "//depot/FYGame/Source/Bar.cpp#2 - editing D:\\FYDepot\\FYGame\\Source\\Bar.cpp",
+        );
+        assert_eq!(r, Some((WorkspaceHealthCategory::Differs, "Source/Bar.cpp".to_string())));
+    }
+
+    #[test]
+    fn test_parse_reconcile_line_edited_also_opened() {
+        // reconcile -n edit arm can read "- edited, also opened" -> differs
+        let r = parse_reconcile_line("//depot/FYGame/Source/Bar.h#2 - edited, also opened");
+        assert_eq!(r, Some((WorkspaceHealthCategory::Differs, "Source/Bar.h".to_string())));
+    }
+
+    #[test]
+    fn test_parse_reconcile_line_info_line_is_none() {
+        // Summary/info lines are NOT categorized entries.
+        assert_eq!(parse_reconcile_line("... file(s) up-to-date."), None);
+    }
+
+    #[test]
+    fn test_parse_reconcile_line_empty_is_none() {
+        assert_eq!(parse_reconcile_line(""), None);
+    }
+
+    #[test]
+    fn test_parse_reconcile_line_strips_project_prefix() {
+        // reconcile -l emits local-syntax relative paths; the display path
+        // strips a leading "<project>/" so the UI shows "Config/...".
+        let r = parse_reconcile_line(
+            "FYGame/Config/DefaultEngine.ini#1 - added as D:\\FYDepot\\FYGame\\Config\\DefaultEngine.ini",
+        );
+        assert_eq!(r, Some((WorkspaceHealthCategory::NotInDepot, "Config/DefaultEngine.ini".to_string())));
+    }
+
+    #[test]
+    fn test_parse_where_line_mapped_triple() {
+        // 3 whitespace-separated path tokens (depot client local) -> Mapped.
+        // The caller skips mapped lines; this is NOT the unmapped case.
+        let r = parse_where_line(
+            "//FYDepot/FYGame/Config/DefaultEngine.ini //client/FYGame/Config/DefaultEngine.ini D:\\FYDepot\\FYGame\\Config\\DefaultEngine.ini",
+        );
+        assert_eq!(r, Some((true, "Config/DefaultEngine.ini".to_string())));
+    }
+
+    #[test]
+    fn test_parse_where_line_unmapped() {
+        // The motivating case: "- <path> - file(s) not in client view."
+        let r = parse_where_line("- //FYDepot/FYGame/FYGame.uproject - file(s) not in client view.");
+        assert_eq!(r, Some((false, "FYGame/FYGame.uproject".to_string())));
+    }
+
+    #[test]
+    fn test_parse_where_line_info_line_is_none() {
+        // Non-path info lines (e.g. summary) are None.
+        assert_eq!(parse_where_line("... file(s) not in client view."), None);
+    }
+
+    #[test]
+    fn test_is_ignored_generated_intermediate() {
+        assert!(is_ignored_generated("Intermediate/Project/xxxx.bin"));
+    }
+
+    #[test]
+    fn test_is_ignored_generated_binaries() {
+        assert!(is_ignored_generated("Binaries/Win64/Foo.dll"));
+    }
+
+    #[test]
+    fn test_is_ignored_generated_saved() {
+        assert!(is_ignored_generated("Saved/Autosaves/Map.umap"));
+    }
+
+    #[test]
+    fn test_is_ignored_generated_source_is_false() {
+        // Source is IN-scope (the whitelist), NOT generated.
+        assert!(!is_ignored_generated("Source/Foo.cpp"));
+    }
+
+    #[test]
+    fn test_is_ignored_generated_config_is_false() {
+        assert!(!is_ignored_generated("Config/DefaultEngine.ini"));
+    }
+
+    #[test]
+    fn test_is_ignored_generated_sln() {
+        assert!(is_ignored_generated("Foo.sln"));
+    }
+
+    #[test]
+    fn test_is_ignored_generated_vs_dir() {
+        assert!(is_ignored_generated(".vs/config/anything"));
+    }
+
+    #[test]
+    fn test_build_audit_whitelist_args_three_entries() {
+        // The whitelist is EXACTLY 3 depot-syntax entries: Config/..., Source/...,
+        // and the <project>.uproject file. Per D-scope: whitelist, not exclude list.
+        let args = build_audit_whitelist_args("D:\\FYDepot", "FYGame");
+        assert_eq!(args.len(), 3, "expected exactly 3 whitelist entries, got {args:?}");
+        // Config subtree (wildcard)
+        assert!(
+            args.iter().any(|a| a.ends_with("/Config/...")),
+            "missing Config/... entry: {args:?}"
+        );
+        // Source subtree (wildcard)
+        assert!(
+            args.iter().any(|a| a.ends_with("/Source/...")),
+            "missing Source/... entry: {args:?}"
+        );
+        // .uproject descriptor file (exact, no wildcard)
+        assert!(
+            args.iter().any(|a| a.ends_with("/FYGame.uproject")),
+            "missing FYGame.uproject entry: {args:?}"
+        );
+    }
+
+    #[test]
+    fn test_build_audit_whitelist_args_resolves_unrealengine_prefix() {
+        // When the project lives under root/UnrealEngine/<project>/ (the common
+        // FYGame layout), the whitelist entries carry the UnrealEngine/ prefix.
+        // Uses std::env::temp_dir so the filesystem probe in resolve matches
+        // (mirrors the existing resolve_non_excluded_paths test convention).
+        use std::fs;
+        let tmp_dir = std::env::temp_dir().join("p4_test_audit_whitelist_ue_prefix");
+        let _ = fs::remove_dir_all(&tmp_dir);
+        let project_dir = tmp_dir.join("UnrealEngine").join("FYGame");
+        fs::create_dir_all(project_dir.join("Config")).unwrap();
+        fs::create_dir_all(project_dir.join("Source")).unwrap();
+        fs::write(project_dir.join("FYGame.uproject"), "{}").unwrap();
+
+        let root_str = tmp_dir.to_string_lossy().replace('\\', "/");
+        let args = build_audit_whitelist_args(&root_str, "FYGame");
+        assert!(
+            args.iter().any(|a| a.contains("UnrealEngine/FYGame/Config/...")),
+            "expected UnrealEngine/FYGame/Config/... when project is under UnrealEngine/, got {args:?}"
+        );
+        let _ = fs::remove_dir_all(&tmp_dir);
     }
 
     // --- New tests for SyncOptions and arg-builder functions ---

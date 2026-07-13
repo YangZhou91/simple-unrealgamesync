@@ -1,6 +1,6 @@
 use crate::models::SyncEvent;
 use crate::services::p4_executor;
-use crate::services::p4_executor::{P4Executor, SyncOptions};
+use crate::services::p4_executor::{P4Executor, SyncOptions, WorkspaceHealthReport};
 use crate::services::process_manager::ProcessManager;
 use crate::services::sync_orchestrator::SyncOrchestrator;
 use crate::services::workspace::WorkspaceService;
@@ -10,6 +10,7 @@ use serde::Serialize;
 use std::sync::Arc;
 use tauri::ipc::Channel;
 use tauri::{AppHandle, State};
+use tokio_util::sync::CancellationToken;
 
 #[derive(Serialize)]
 pub struct P4BehindInfo {
@@ -108,6 +109,34 @@ pub async fn cancel_sync_behind(state: State<'_, Arc<P4Executor>>) -> Result<(),
     trace_command("cancel_sync_behind", String::new(), async move {
         state.cancel_behind_check().await;
         Ok(())
+    })
+    .await
+}
+
+/// quick-260713-s44: Run the read-only workspace-health audit (p4 reconcile -n
+/// + p4 where over the Config/Source/.uproject whitelist). Mirrors
+/// check_sync_behind's shape but uses a fresh CancellationToken (NOT coupled to
+/// the behind-check slot) since the audit is an independent on-demand op.
+#[tauri::command]
+pub async fn check_workspace_health(
+    app: AppHandle,
+    state: State<'_, Arc<P4Executor>>,
+    workspace_id: String,
+) -> Result<WorkspaceHealthReport, String> {
+    let args_redacted = crate::utils::redact::redact(&format!("workspace_id={workspace_id}"))
+        .into_owned();
+    trace_command("check_workspace_health", args_redacted, async move {
+        let ws = WorkspaceService::get(&app, &workspace_id)
+            .await
+            .map_err(|e| e.to_string())?;
+
+        // Fresh CancellationToken — do NOT reuse the behind-check slot (the
+        // audit is a separate on-demand op, not a scheduled behind-check).
+        let token = CancellationToken::new();
+        state
+            .audit_workspace(&ws, token)
+            .await
+            .map_err(|e| e.to_string())
     })
     .await
 }
