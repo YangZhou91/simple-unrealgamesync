@@ -2,6 +2,15 @@
 
 All notable changes to Simple UnrealGameSync will be documented in this file.
 
+## [1.4.2] - 2026-07-13
+
+### Added
+- **"Sync UnrealEngine engine" toggle for Target CL sync (default OFF)**: new checkbox in the Target CL area. With it OFF, a Target CL sync skips the engine source (`UnrealEngine/Engine/{Source,Shaders,Config}/...`) so the post-sync `git pull` of UnrealEngine stays clean — no more `git stash pop failed` on dual-VCS workspaces where `UnrealEngine/` is also a git repo. Rollback always syncs the engine regardless (pinned to the CL). Normal HEAD sync (no Target CL) is unchanged.
+- **Test button for the updater proxy**: Settings → 网络/代理 now has a Test/测试连接 button that verifies the configured proxy (default `http://localhost:7897`) reaches GitHub via the updater's first-party `check({ proxy, timeout: 8000 })` API (not a JS `fetch` — tests the real reqwest layer). Errors classified: refused → Clash not listening on the port; timeout → proxy up but GitHub blocked.
+
+### Changed
+- RunningPanel now emits a throttled `[ui] render step=.. mode=byteBar|countBar|prep|indeterminate ...` log line mirroring ProgressSection's render priority, so the byte-bar-vs-count-bar decision is directly greppable (was only inferable from backend `disk_usage` lines).
+
 ## [1.4.1] - 2026-07-10
 
 ### Added
