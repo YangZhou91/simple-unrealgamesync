@@ -2,6 +2,11 @@
 
 All notable changes to Simple UnrealGameSync will be documented in this file.
 
+## [1.4.3] - 2026-07-14
+
+### Added
+- **Workspace Health audit**: new "健康 / Workspace Health" tab (3rd, alongside Sync/History) with an on-demand "检查 / Audit" button. Scans the FYGame structural whitelist (`Config/` + `Source/` + `FYGame.uproject`; Content/Binaries/Intermediate/Saved/Plugins/Build excluded) and surfaces files with abnormal p4 status in 4 categories: **未映射/unmapped** (not in the current client View — e.g. a file stranded after a stream switch; the motivating `FYGame.uproject` "not in current workspace mapping" case), **磁盘缺失/missing-on-disk**, **未入库/not-in-depot** (filtered vs generated/ignored patterns), **已修改/differs**. Backed by `p4 reconcile -n -l -I` (3 disk-vs-depot categories) + `p4 where` (unmapped detection — reconcile only processes View-mapped files, so unmapped needs the 2nd command). Read-only v1 (no fix actions). Path lists render via the existing LogViewer (react-virtuoso).
+
 ## [1.4.2] - 2026-07-13
 
 ### Added
