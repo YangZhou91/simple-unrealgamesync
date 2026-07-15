@@ -139,7 +139,7 @@ impl GitService {
 
         // Step 2: git pull
         let mut child = tokio::process::Command::new("git")
-            .args(["pull"])
+            .args(["pull", "--ff-only"])
             .current_dir(&ue_path)
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::piped())
@@ -156,13 +156,17 @@ impl GitService {
             self.process_manager.track_pid(id).await;
         }
 
-        // INSTR-09 / D-09 / D-10: process.spawned at the track_pid site. git
-        // pull has no identity-adjacent flags (arg vector is just `["pull"]`),
-        // but `current_dir` embeds root_path — route cwd through the redact net
-        // (Phase-10 Users-home pattern masks the prefix). The D-08 safeguard is
-        // inline here (git has no p4-style client flag, so render_spawned_line's
-        // p4-shaped prefix does not apply). Bound to named locals so the borrows
-        // outlive the format!() / redact() expression statements.
+        // INSTR-09 / D-09 / D-10: process.spawned at the track_pid site. The
+        // arg vector is now `["pull", "--ff-only"]`; `--ff-only` is a strategy
+        // flag carrying no identity, username, URL, or path, so it needs no
+        // additional redaction — the only identity-bearing value in the spawn
+        // line remains `current_dir` (ue_path / root_path), which is already
+        // routed through the redact net via the `cwd_redacted` local below
+        // (Phase-10 Users-home pattern masks the prefix, unchanged). The D-08
+        // safeguard is inline here (git has no p4-style client flag, so
+        // render_spawned_line's p4-shaped prefix does not apply). Bound to
+        // named locals so the borrows outlive the format!() / redact()
+        // expression statements.
         {
             let cwd_lossy = ue_path.to_string_lossy();
             let cwd_redacted = crate::utils::redact::redact(&cwd_lossy).into_owned();
@@ -335,7 +339,9 @@ impl GitService {
             let _ = channel.send(SyncEvent::SyncFailed {
                 step: "gitPull".to_string(),
                 error: format!(
-                    "git pull failed with exit code {}",
+                    "git pull failed (exit code {}) — --ff-only refused to merge because local has diverged from origin. \
+                     Likely cause: local commits not on origin. \
+                     Manually reconcile (git rebase origin/<branch> or git reset --hard origin/<branch>) in the UnrealEngine repo, then retry the sync.",
                     status
                         .code()
                         .map(|c| c.to_string())
