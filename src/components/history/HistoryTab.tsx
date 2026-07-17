@@ -4,6 +4,16 @@ import { Badge } from "@/components/ui/badge";
 import { RotateCcw } from "lucide-react";
 import type { HistoryRecord } from "@/lib/types";
 
+function formatDuration(ms: number): string {
+  const totalSeconds = Math.floor(ms / 1000);
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  if (hours > 0) return `${hours}h ${minutes}m`;
+  if (minutes > 0) return `${minutes}m ${seconds}s`;
+  return `${seconds}s`;
+}
+
 interface HistoryTabProps {
   workspaceId: string | null;
   isSyncRunning: boolean;
@@ -71,6 +81,9 @@ export function HistoryTab({
                 </div>
                 <div className="flex-1 text-sm text-muted truncate">
                   {record.timestamp}
+                </div>
+                <div className="w-[80px] shrink-0 whitespace-nowrap text-right text-sm text-muted">
+                  {record.durationMs != null ? formatDuration(record.durationMs) : "—"}
                 </div>
                 <div className="min-w-[80px] shrink-0 whitespace-nowrap text-right text-sm text-muted">
                   {record.fileCount} files

@@ -79,6 +79,7 @@ export interface HistoryRecord {
   timestamp: string;
   fileCount: number;
   workspaceId: string;
+  durationMs?: number;
 }
 
 export interface ChangelistEntry {
