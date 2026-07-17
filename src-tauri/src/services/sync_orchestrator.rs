@@ -75,6 +75,7 @@ impl SyncOrchestrator {
         app: AppHandle,
     ) -> Result<(), AppError> {
         let workspace = WorkspaceService::get(&app, &workspace_id).await?;
+        let pipeline_start = std::time::Instant::now();
 
         // Network pre-check (silent -- not a StepIndicator step, per D-01)
         info!("[sync] workspace={}", workspace.name);
@@ -280,6 +281,7 @@ impl SyncOrchestrator {
 
         // Save history record after successful sync
         if let Some(ref cl_value) = cl {
+            let elapsed_ms = pipeline_start.elapsed().as_millis() as u64;
             let _ = HistoryService::save_record(
                 &app,
                 HistoryRecord {
@@ -287,7 +289,7 @@ impl SyncOrchestrator {
                     timestamp: now_string(),
                     file_count: files_synced,
                     workspace_id: workspace_id.clone(),
-                    duration_ms: None,
+                    duration_ms: Some(elapsed_ms),
                 },
             )
             .await;
@@ -327,6 +329,7 @@ impl SyncOrchestrator {
         validate_target_cl(&target_cl)?;
 
         let workspace = WorkspaceService::get(&app, &workspace_id).await?;
+        let pipeline_start = std::time::Instant::now();
 
         // Network pre-check (silent -- not a StepIndicator step)
         info!("[sync] workspace={}", workspace.name);
@@ -489,6 +492,7 @@ impl SyncOrchestrator {
 
         // Save history record after successful rollback
         if let Some(ref cl_value) = cl {
+            let elapsed_ms = pipeline_start.elapsed().as_millis() as u64;
             let _ = HistoryService::save_record(
                 &app,
                 HistoryRecord {
@@ -496,7 +500,7 @@ impl SyncOrchestrator {
                     timestamp: now_string(),
                     file_count: files_synced,
                     workspace_id: workspace_id.clone(),
-                    duration_ms: None,
+                    duration_ms: Some(elapsed_ms),
                 },
             )
             .await;
