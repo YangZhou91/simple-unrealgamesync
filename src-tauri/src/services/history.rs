@@ -164,6 +164,7 @@ mod tests {
             timestamp: "2024-01-15 10:30:00".to_string(),
             file_count: 42,
             workspace_id: "ws-uuid-123".to_string(),
+            duration_ms: None,
         };
 
         let json = serde_json::to_string(&record).unwrap();
@@ -204,12 +205,14 @@ mod tests {
                 timestamp: "2024-06-01 12:00:00".to_string(), // recent
                 file_count: 10,
                 workspace_id: "ws1".to_string(),
+                duration_ms: None,
             },
             HistoryRecord {
                 changelist: "99".to_string(),
                 timestamp: "2023-06-01 12:00:00".to_string(), // old (before cutoff)
                 file_count: 5,
                 workspace_id: "ws1".to_string(),
+                duration_ms: None,
             },
         ];
 
@@ -228,12 +231,14 @@ mod tests {
                 timestamp: "2024-06-01 12:00:00".to_string(),
                 file_count: 10,
                 workspace_id: "ws1".to_string(),
+                duration_ms: None,
             },
             HistoryRecord {
                 changelist: "99".to_string(),
                 timestamp: "2024-05-01 12:00:00".to_string(),
                 file_count: 5,
                 workspace_id: "ws1".to_string(),
+                duration_ms: None,
             },
         ];
 
@@ -253,6 +258,7 @@ mod tests {
                 timestamp: "2024-01-01 10:00:00".to_string(),
                 file_count: 10,
                 workspace_id: "ws1".to_string(),
+                duration_ms: None,
             },
         );
         records.insert(
@@ -262,6 +268,7 @@ mod tests {
                 timestamp: "2024-01-02 10:00:00".to_string(),
                 file_count: 20,
                 workspace_id: "ws1".to_string(),
+                duration_ms: None,
             },
         );
         records.insert(
@@ -271,6 +278,7 @@ mod tests {
                 timestamp: "2024-01-03 10:00:00".to_string(),
                 file_count: 30,
                 workspace_id: "ws1".to_string(),
+                duration_ms: None,
             },
         );
 
@@ -293,6 +301,7 @@ mod tests {
                 timestamp: format_timestamp(now - 86400), // 1 day ago
                 file_count: 10,
                 workspace_id: "ws1".to_string(),
+                duration_ms: None,
             },
             // Exactly 89 days ago (should survive)
             HistoryRecord {
@@ -300,6 +309,7 @@ mod tests {
                 timestamp: format_timestamp(now - 89 * 86400),
                 file_count: 5,
                 workspace_id: "ws1".to_string(),
+                duration_ms: None,
             },
             // 91 days ago (should be pruned)
             HistoryRecord {
@@ -307,6 +317,7 @@ mod tests {
                 timestamp: format_timestamp(now - 91 * 86400),
                 file_count: 3,
                 workspace_id: "ws1".to_string(),
+                duration_ms: None,
             },
             // 100 days ago (should be pruned)
             HistoryRecord {
@@ -314,6 +325,7 @@ mod tests {
                 timestamp: format_timestamp(now - 100 * 86400),
                 file_count: 1,
                 workspace_id: "ws1".to_string(),
+                duration_ms: None,
             },
         ];
 

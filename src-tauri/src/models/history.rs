@@ -30,12 +30,14 @@ mod tests {
             timestamp: "2024-01-15T10:30:00Z".to_string(),
             file_count: 42,
             workspace_id: "ws-uuid-123".to_string(),
+            duration_ms: Some(120_000),
         };
 
         let json = serde_json::to_string(&record).unwrap();
         assert!(json.contains("\"changelist\":\"12345\""));
         assert!(json.contains("\"fileCount\":42"));
         assert!(json.contains("\"workspaceId\":\"ws-uuid-123\""));
+        assert!(json.contains("\"durationMs\":120000"));
 
         let deserialized: HistoryRecord = serde_json::from_str(&json).unwrap();
         assert_eq!(record.changelist, deserialized.changelist);
