@@ -61,7 +61,7 @@ export function HistoryTab({
                 key={`${record.changelist}-${record.timestamp}`}
                 className="flex items-center h-10 px-4 border-b border-border hover:bg-card transition-colors"
               >
-                <div className="w-[120px]">
+                <div className="w-[120px] shrink-0 whitespace-nowrap">
                   <Badge
                     variant="secondary"
                     className="font-semibold text-xs"
@@ -72,7 +72,7 @@ export function HistoryTab({
                 <div className="flex-1 text-sm text-muted truncate">
                   {record.timestamp}
                 </div>
-                <div className="w-[80px] text-right text-sm text-muted">
+                <div className="min-w-[80px] shrink-0 whitespace-nowrap text-right text-sm text-muted">
                   {record.fileCount} files
                 </div>
               </div>
