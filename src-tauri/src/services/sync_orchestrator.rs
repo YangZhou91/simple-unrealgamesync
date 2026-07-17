@@ -287,6 +287,7 @@ impl SyncOrchestrator {
                     timestamp: now_string(),
                     file_count: files_synced,
                     workspace_id: workspace_id.clone(),
+                    duration_ms: None,
                 },
             )
             .await;
@@ -495,6 +496,7 @@ impl SyncOrchestrator {
                     timestamp: now_string(),
                     file_count: files_synced,
                     workspace_id: workspace_id.clone(),
+                    duration_ms: None,
                 },
             )
             .await;

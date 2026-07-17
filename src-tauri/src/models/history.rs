@@ -7,6 +7,8 @@ pub struct HistoryRecord {
     pub timestamp: String,
     pub file_count: u64,
     pub workspace_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub duration_ms: Option<u64>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
