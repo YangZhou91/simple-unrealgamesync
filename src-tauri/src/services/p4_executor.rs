@@ -372,11 +372,22 @@ pub fn build_force_sync_args() -> Vec<String> {
 pub fn parse_sync_n_total_bytes(stdout: &str) -> Option<u64> {
     const MARKER: &str = "bytes added/updated=";
 
+    // quick-260718-eje: strip the `-s` severity tag from each line before the
+    // marker-split so an `info:` prefix can't offset a marker, and so the
+    // terminal `exit: 0` line's digits are explicitly excluded from parsing
+    // (its segment has no marker, but the strip makes the guarantee local
+    // rather than relying on the marker-split's incident behavior).
+    let normalized: String = stdout
+        .lines()
+        .map(strip_p4_prefix)
+        .collect::<Vec<_>>()
+        .join("\n");
+
     // Split on the marker. Element 0 is the text BEFORE the first marker (skip
     // it via `.skip(1)`); every remaining element is the text immediately
     // following one `bytes added/updated=` marker.
     let mut total: u64 = 0;
-    for segment in stdout.split(MARKER).skip(1) {
+    for segment in normalized.split(MARKER).skip(1) {
         let bytes = segment.as_bytes();
 
         // Read the first ASCII-digit run as D (must be non-empty).
@@ -542,14 +553,9 @@ impl P4Executor {
         }
 
         let stdout = String::from_utf8_lossy(&output.stdout);
-        let line = stdout.lines().next().unwrap_or("");
-        // Format: "Change 12345 on 2024/01/01 by user@client"
-        let parts: Vec<&str> = line.split_whitespace().collect();
-        if parts.len() >= 2 && parts[0] == "Change" {
-            Ok(Some(parts[1].to_string()))
-        } else {
-            Ok(None)
-        }
+        // quick-260718-eje: extracted free fn (severity-aware — strips the
+        // `info:` tag `-s` now applies, skips `error:`/`exit:` lines).
+        Ok(parse_have_changelist(&stdout))
     }
 
     /// Read the bound p4 stream of the workspace's client spec via `p4 client -o`.
@@ -573,19 +579,10 @@ impl P4Executor {
         }
 
         let stdout = String::from_utf8_lossy(&output.stdout);
-        for line in stdout.lines() {
-            // PINNED parse rule: strip_prefix("Stream:") + trim(). No regex,
-            // no split-on-whitespace — `p4 client -o` emits `Stream: <path>`
-            // with a single leading space after the colon.
-            if let Some(rest) = line.strip_prefix("Stream:") {
-                let s = rest.trim();
-                if !s.is_empty() {
-                    return Ok(Some(s.to_string()));
-                }
-                return Ok(None);
-            }
-        }
-        Ok(None)
+        // quick-260718-eje: extracted free fn (severity-aware — strips the
+        // `info:` tag `-s` now applies, skips `error:`/`exit:` lines; the
+        // strip_prefix("Stream:") + trim rule itself is unchanged).
+        Ok(parse_client_stream(&stdout))
     }
 
     #[allow(clippy::too_many_arguments)] // 9 args: sync_log_dir added by
@@ -1810,7 +1807,108 @@ impl P4Executor {
     }
 }
 
+// ========================================================================
+// quick-260718-eje: `p4 -s` scripting-mode severity-tag layer
+// ========================================================================
+//
+// With the global `-s` flag (wired by `p4_global_args`), p4 tags EVERY stdout
+// line with a severity prefix: `info: `, `warning: `, `error: `, and a single
+// terminal `exit: <code>` line. Every parser below strips or routes on the
+// tag BEFORE matching, so prefixed and legacy untagged output both parse
+// identically (zero behavior change). The `exit: <code>` line is informational
+// only — process exit status remains the authoritative success signal.
+
+/// Severity tag p4 applies to each stdout line in `-s` scripting mode.
+/// `Text` = legacy untagged line (pre-`-s` output shape).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum P4Severity {
+    Info,
+    Warning,
+    Error,
+    Exit,
+    Text,
+}
+
+/// Split one p4 stdout line into its `-s` severity tag and the remainder.
+/// Recognizes `info: `/`warning: `/`error: `/`exit: ` at the START of the line
+/// (defensively also a bare `exit:` with no trailing space). Any other line
+/// returns `(Text, line)` unchanged — depot paths start with `//` and local
+/// paths with a drive letter, so there are no false-positive prefixes.
+pub fn split_p4_severity(line: &str) -> (P4Severity, &str) {
+    if let Some(rest) = line.strip_prefix("info: ") {
+        (P4Severity::Info, rest)
+    } else if let Some(rest) = line.strip_prefix("warning: ") {
+        (P4Severity::Warning, rest)
+    } else if let Some(rest) = line.strip_prefix("error: ") {
+        (P4Severity::Error, rest)
+    } else if let Some(rest) = line.strip_prefix("exit: ") {
+        (P4Severity::Exit, rest)
+    } else if let Some(rest) = line.strip_prefix("exit:") {
+        (P4Severity::Exit, rest)
+    } else {
+        (P4Severity::Text, line)
+    }
+}
+
+/// Convenience: just the line with any `-s` severity tag removed.
+fn strip_p4_prefix(line: &str) -> &str {
+    split_p4_severity(line).1
+}
+
+/// Parse the have-changelist out of `p4 changes -m1 //<client>/...#have`
+/// stdout. Severity-aware: skips `exit:`/`error:` lines, strips `info:`.
+/// Returns `Some(<cl>)` on the first `Change <N> ...` line with a numeric CL
+/// token; `None` otherwise (mirrors the previous inline parse contract).
+fn parse_have_changelist(stdout: &str) -> Option<String> {
+    stdout.lines().find_map(|line| {
+        let (severity, rest) = split_p4_severity(line);
+        if matches!(severity, P4Severity::Exit | P4Severity::Error) {
+            return None;
+        }
+        // Format: "Change 12345 on 2024/01/01 by user@client"
+        let parts: Vec<&str> = rest.split_whitespace().collect();
+        if parts.len() >= 2
+            && parts[0] == "Change"
+            && !parts[1].is_empty()
+            && parts[1].chars().all(|c| c.is_ascii_digit())
+        {
+            Some(parts[1].to_string())
+        } else {
+            None
+        }
+    })
+}
+
+/// Parse the bound stream out of `p4 client -o` stdout. Severity-aware:
+/// skips `exit:`/`error:` lines, strips `info:`. Returns `Some(stream)` on a
+/// non-empty `Stream:` field, `None` on an empty `Stream:` (classic client)
+/// or when no `Stream:` line exists. Preserves the previous inline parse
+/// contract (strip_prefix("Stream:") + trim, no regex).
+fn parse_client_stream(stdout: &str) -> Option<String> {
+    for line in stdout.lines() {
+        let (severity, rest) = split_p4_severity(line);
+        if matches!(severity, P4Severity::Exit | P4Severity::Error) {
+            continue;
+        }
+        // PINNED parse rule: strip_prefix("Stream:") + trim(). No regex, no
+        // split-on-whitespace — `p4 client -o` emits `Stream: <path>` with a
+        // single leading space after the colon.
+        if let Some(stream_rest) = rest.strip_prefix("Stream:") {
+            let s = stream_rest.trim();
+            if !s.is_empty() {
+                return Some(s.to_string());
+            }
+            return None;
+        }
+    }
+    None
+}
+
 fn parse_sync_file_count(line: &str) -> u64 {
+    // Strip any `-s` severity tag first (quick-260718-eje): the `exit:`/
+    // `warning:`/`error:` remainders contain no sync markers, so the terminal
+    // `exit: 0` line is NEVER counted as a synced file.
+    let line = strip_p4_prefix(line);
     if line.contains(" - updating ") || line.contains(" - added as ") || line.contains(" - deleted")
     {
         1
@@ -1820,6 +1918,8 @@ fn parse_sync_file_count(line: &str) -> u64 {
 }
 
 fn extract_sync_file_path(line: &str) -> String {
+    // Strip any `-s` severity tag first (quick-260718-eje).
+    let line = strip_p4_prefix(line);
     for sep in &[" - updating ", " - added as "] {
         if let Some(idx) = line.find(sep) {
             let local_path = &line[idx + sep.len()..];
@@ -1847,6 +1947,13 @@ pub fn parse_changelists(output: &str) -> Vec<ChangelistEntry> {
     let mut current: Option<ChangelistEntry> = None;
 
     for line in output.lines() {
+        // quick-260718-eje: route on the `-s` severity tag. `exit:`/`error:`
+        // lines are SKIPPED — in particular the terminal `exit: 0` must never
+        // be glued onto the last entry's description as a "continuation".
+        let (severity, line) = split_p4_severity(line);
+        if matches!(severity, P4Severity::Exit | P4Severity::Error) {
+            continue;
+        }
         if let Some(rest) = line.strip_prefix("Change ") {
             // Verify this is a real entry header by checking that the first
             // token after "Change " is a numeric CL number. This prevents
@@ -2013,7 +2120,14 @@ const RECONCILE_MARKERS_DIFFERS: &[&str] = &[" - editing ", " - edited", " - edi
 /// T-s44-01: pure parser, returns Option, no unwrap on parsed paths — a
 /// malformed p4 line cannot panic the drain.
 pub fn parse_reconcile_line(line: &str) -> Option<(WorkspaceHealthCategory, String)> {
-    let line = line.trim();
+    // quick-260718-eje: route on the `-s` severity tag — `exit:`/`error:`
+    // lines are NEVER categorized (an error-tagged line must not fall through
+    // to the marker match and yield a garbage entry).
+    let (severity, rest) = split_p4_severity(line);
+    if matches!(severity, P4Severity::Exit | P4Severity::Error) {
+        return None;
+    }
+    let line = rest.trim();
     if line.is_empty() {
         return None;
     }
@@ -2095,7 +2209,13 @@ fn extract_whitelist_relative_path(path: &str) -> String {
 /// mapped path is derived from the depot (1st) token via the whitelist-relative
 /// extractor (the .uproject unmapped case surfaces as just the filename).
 pub fn parse_where_line(line: &str) -> Option<(bool, String)> {
-    let line = line.trim();
+    // quick-260718-eje: strip the `-s` severity tag, then run the existing
+    // unmapped/mapped matching on the remainder. Under `-s`, p4 tags the
+    // "not in client view" unmapped line as `error:` — the tag is stripped
+    // here so the remainder still parses as unmapped (NOT a garbage "error:"
+    // path), while the terminal `exit: 0` line parses to None downstream.
+    let (_, rest) = split_p4_severity(line);
+    let line = rest.trim();
     if line.is_empty() {
         return None;
     }
