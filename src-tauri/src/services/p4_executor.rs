@@ -2499,6 +2499,244 @@ Server network estimates: files added/updated/deleted=0/0/0, bytes added/updated
         let _ = fs::remove_dir_all(&tmp_dir);
     }
 
+    // --- quick-260718-eje: p4 -s severity-tag split + prefixed-line parser tests ---
+    //
+    // With the global `-s` scripting flag (Task 2 wires it onto every spawn),
+    // EVERY p4 stdout line arrives severity-tagged: `info: `/`warning: `/
+    // `error: `/`exit: <code>` (terminal). All parsers strip/route on the tag
+    // via `split_p4_severity` and MUST still accept legacy untagged lines
+    // (the pre-existing unprefixed fixtures above stay untouched and green).
+
+    #[test]
+    fn test_split_p4_severity_info() {
+        assert_eq!(
+            split_p4_severity("info: //depot/f.txt#5 - updating D:\\f.txt"),
+            (P4Severity::Info, "//depot/f.txt#5 - updating D:\\f.txt")
+        );
+    }
+
+    #[test]
+    fn test_split_p4_severity_warning() {
+        assert_eq!(
+            split_p4_severity("warning: //p - no such file(s)."),
+            (P4Severity::Warning, "//p - no such file(s).")
+        );
+    }
+
+    #[test]
+    fn test_split_p4_severity_error() {
+        assert_eq!(
+            split_p4_severity("error: - //depot/x - file(s) not in client view."),
+            (P4Severity::Error, "- //depot/x - file(s) not in client view.")
+        );
+    }
+
+    #[test]
+    fn test_split_p4_severity_exit() {
+        assert_eq!(split_p4_severity("exit: 0"), (P4Severity::Exit, "0"));
+    }
+
+    #[test]
+    fn test_split_p4_severity_exit_no_space() {
+        // Defensive: a bare `exit:` with no trailing space still splits.
+        assert_eq!(split_p4_severity("exit:0"), (P4Severity::Exit, "0"));
+    }
+
+    #[test]
+    fn test_split_p4_severity_plain_text() {
+        assert_eq!(
+            split_p4_severity("//depot/f.txt#5 - updating D:\\f.txt"),
+            (P4Severity::Text, "//depot/f.txt#5 - updating D:\\f.txt")
+        );
+    }
+
+    #[test]
+    fn test_split_p4_severity_empty() {
+        assert_eq!(split_p4_severity(""), (P4Severity::Text, ""));
+    }
+
+    #[test]
+    fn test_parse_sync_file_count_info_prefixed() {
+        assert_eq!(
+            1,
+            parse_sync_file_count(
+                "info: //depot/MyGame/file.txt#5 - updating E:\\MyGame\\file.txt"
+            )
+        );
+    }
+
+    #[test]
+    fn test_parse_sync_file_count_exit_line_is_zero() {
+        // The terminal `exit: <code>` line must NEVER count as a synced file.
+        assert_eq!(0, parse_sync_file_count("exit: 0"));
+    }
+
+    #[test]
+    fn test_parse_sync_file_count_warning_line_is_zero() {
+        assert_eq!(
+            0,
+            parse_sync_file_count("warning: //p - no such file(s).")
+        );
+    }
+
+    #[test]
+    fn test_extract_sync_file_path_info_prefixed() {
+        assert_eq!(
+            "E:\\MyGame\\file.txt",
+            extract_sync_file_path(
+                "info: //depot/MyGame/file.txt#5 - updating E:\\MyGame\\file.txt"
+            )
+        );
+    }
+
+    #[test]
+    fn test_parse_sync_n_total_bytes_info_prefixed_multi_line_with_exit() {
+        // EVERY estimate line `info:`-prefixed + a trailing `exit: 0` line.
+        // The exit line contributes nothing; the D+E sum is unchanged.
+        let stdout = "\
+info: Server network estimates: files added/updated/deleted=0/0/0, bytes added/updated=0/0
+info: Server network estimates: files added/updated/deleted=0/0/0, bytes added/updated=0/38275900
+info: Server network estimates: files added/updated/deleted=0/0/0, bytes added/updated=0/359115
+info: Server network estimates: files added/updated/deleted=0/0/0, bytes added/updated=0/42792
+exit: 0
+";
+        assert_eq!(Some(38677807), parse_sync_n_total_bytes(stdout));
+    }
+
+    #[test]
+    fn test_parse_changelists_info_prefixed_with_exit_line() {
+        let input = "info: Change 12345 on 2024/01/15 by user@client *pending* Fix bug\nexit: 0";
+        let entries = parse_changelists(input);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].number, "12345");
+        assert_eq!(entries[0].date, "2024/01/15");
+        assert!(entries[0].description.contains("Fix bug"));
+        // The trailing `exit: 0` line must NOT be glued onto the description
+        // as a "continuation" line.
+        assert!(!entries[0].description.contains("exit"));
+    }
+
+    #[test]
+    fn test_parse_changelists_error_line_skipped() {
+        // An `error:`-tagged line between entries is skipped, not appended to
+        // the previous entry's description.
+        let input = "info: Change 12345 on 2024/01/15 by user@client *pending* Fix bug\nerror: some depot error\ninfo: Change 12344 on 2024/01/14 by user2@client2 *pending* Add feature\nexit: 0";
+        let entries = parse_changelists(input);
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].number, "12345");
+        assert_eq!(entries[1].number, "12344");
+        assert!(!entries[0].description.contains("some depot error"));
+    }
+
+    #[test]
+    fn test_parse_reconcile_line_info_prefixed() {
+        let r = parse_reconcile_line(
+            "info: //depot/FYGame/Config/DefaultEngine.ini#1 - added as D:\\FYDepot\\FYGame\\Config\\DefaultEngine.ini",
+        );
+        assert_eq!(
+            r,
+            Some((
+                WorkspaceHealthCategory::NotInDepot,
+                "Config/DefaultEngine.ini".to_string()
+            ))
+        );
+    }
+
+    #[test]
+    fn test_parse_reconcile_line_exit_is_none() {
+        assert_eq!(parse_reconcile_line("exit: 0"), None);
+    }
+
+    #[test]
+    fn test_parse_reconcile_line_error_is_none() {
+        // Error-tagged lines are routed out, never mis-categorized.
+        assert_eq!(
+            parse_reconcile_line("error: //depot/FYGame/Config/X.ini#1 - added as D:\\X"),
+            None
+        );
+    }
+
+    #[test]
+    fn test_parse_where_line_info_prefixed_mapped() {
+        let r = parse_where_line(
+            "info: //FYDepot/FYGame/Config/DefaultEngine.ini //client/FYGame/Config/DefaultEngine.ini D:\\FYDepot\\FYGame\\Config\\DefaultEngine.ini",
+        );
+        assert_eq!(r, Some((true, "Config/DefaultEngine.ini".to_string())));
+    }
+
+    #[test]
+    fn test_parse_where_line_error_prefixed_unmapped() {
+        // p4 tags the "not in client view" line as an error under `-s`; the
+        // parser must strip the tag and still surface the unmapped path
+        // (NOT a garbage "error:" path).
+        let r = parse_where_line(
+            "error: - //FYDepot/FYGame/FYGame.uproject - file(s) not in client view.",
+        );
+        assert_eq!(r, Some((false, "FYGame/FYGame.uproject".to_string())));
+    }
+
+    #[test]
+    fn test_parse_where_line_exit_is_none() {
+        assert_eq!(parse_where_line("exit: 0"), None);
+    }
+
+    #[test]
+    fn test_parse_have_changelist_info_prefixed() {
+        assert_eq!(
+            parse_have_changelist("info: Change 12345 on 2024/01/01 by user@client\nexit: 0"),
+            Some("12345".to_string())
+        );
+    }
+
+    #[test]
+    fn test_parse_have_changelist_legacy_unprefixed() {
+        assert_eq!(
+            parse_have_changelist("Change 678 on 2024/01/01 by user@client"),
+            Some("678".to_string())
+        );
+    }
+
+    #[test]
+    fn test_parse_have_changelist_error_only_is_none() {
+        assert_eq!(
+            parse_have_changelist("error: //client/...#have - no such file(s).\nexit: 1"),
+            None
+        );
+    }
+
+    #[test]
+    fn test_parse_client_stream_info_prefixed() {
+        assert_eq!(
+            parse_client_stream(
+                "info: Client: zhouyang\ninfo: Stream: //FY_Depot/main\nexit: 0"
+            ),
+            Some("//FY_Depot/main".to_string())
+        );
+    }
+
+    #[test]
+    fn test_parse_client_stream_classic_no_stream_line_is_none() {
+        assert_eq!(
+            parse_client_stream("info: Client: zhouyang\ninfo: Root: D:\\FYDepot\nexit: 0"),
+            None
+        );
+    }
+
+    #[test]
+    fn test_parse_client_stream_legacy_unprefixed() {
+        assert_eq!(
+            parse_client_stream("Client: x\nStream: //depot/main"),
+            Some("//depot/main".to_string())
+        );
+    }
+
+    #[test]
+    fn test_parse_client_stream_empty_stream_value_is_none() {
+        // `Stream:` present but empty → classic client (None), preserved.
+        assert_eq!(parse_client_stream("Stream:\n"), None);
+        assert_eq!(parse_client_stream("info: Stream: \nexit: 0"), None);
+    }
+
     // --- New tests for SyncOptions and arg-builder functions ---
 
     #[test]
