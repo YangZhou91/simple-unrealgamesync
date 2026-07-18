@@ -2857,6 +2857,35 @@ exit: 0
         assert_eq!(parse_client_stream("info: Stream: \nexit: 0"), None);
     }
 
+    // --- quick-260718-eje Task 2: p4_global_args carries `-s` first ---
+
+    #[test]
+    fn test_p4_global_args_script_mode_first() {
+        // `-s` (scripting mode) is a GLOBAL flag and comes FIRST so script
+        // mode applies to the whole session; the client + root ride along.
+        let ws = WorkspaceConfig {
+            id: String::new(),
+            name: "test".to_string(),
+            root_path: "E:\\test".to_string(),
+            project_dir: "MyGame".to_string(),
+            p4_client: "test_client".to_string(),
+            p4_user: String::new(),
+            parallel_threads: 4,
+            exclusions: vec![],
+            last_sync_cl: None,
+            last_sync_time: None,
+            last_sync_file_count: None,
+            interval_minutes: 60,
+        };
+        let args = p4_global_args(&ws);
+        assert_eq!(args[0], "-s", "-s scripting flag must be the FIRST global arg");
+        assert_eq!(
+            args,
+            vec!["-s", "-C", "utf8", "-c", "test_client", "-d", "E:\\test"],
+            "global args carry -s + client + root in one shared place"
+        );
+    }
+
     // --- New tests for SyncOptions and arg-builder functions ---
 
     #[test]
