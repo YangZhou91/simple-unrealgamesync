@@ -447,6 +447,22 @@ pub struct P4Executor {
     next_behind_check_id: AtomicU64,
 }
 
+/// Shared global args for EVERY p4 spawn (quick-260718-eje). `-s` comes
+/// FIRST: script mode severity-tags every stdout line
+/// (`info:`/`warning:`/`error:`/`exit:`); all parsers strip the tag via
+/// `split_p4_severity` (zero behavior change — parsed values identical).
+fn p4_global_args(workspace: &WorkspaceConfig) -> Vec<String> {
+    vec![
+        "-s".to_string(),
+        "-C".to_string(),
+        "utf8".to_string(),
+        "-c".to_string(),
+        workspace.p4_client.clone(),
+        "-d".to_string(),
+        workspace.root_path.clone(),
+    ]
+}
+
 impl P4Executor {
     pub fn new() -> Self {
         Self {
@@ -508,10 +524,27 @@ impl P4Executor {
             }
             Ok(Ok(output)) => {
                 if !output.status.success() {
+                    // quick-260718-eje: with `-s` the diagnostic may be routed
+                    // onto stdout as `error:`-tagged lines (stderr empty) —
+                    // fall back to those so the message stays informative.
                     let stderr = String::from_utf8_lossy(&output.stderr);
+                    let stderr = stderr.trim();
+                    let detail = if !stderr.is_empty() {
+                        stderr.to_string()
+                    } else {
+                        let stdout = String::from_utf8_lossy(&output.stdout);
+                        stdout
+                            .lines()
+                            .filter_map(|line| match split_p4_severity(line) {
+                                (P4Severity::Error, rest) => Some(rest),
+                                _ => None,
+                            })
+                            .collect::<Vec<_>>()
+                            .join("; ")
+                    };
                     Err(AppError::Process(format!(
                         "P4 server is unreachable: {}",
-                        stderr.trim()
+                        detail
                     )))
                 } else {
                     Ok(())
@@ -523,14 +556,9 @@ impl P4Executor {
     fn build_p4_command(&self, workspace: &WorkspaceConfig, args: &[&str]) -> Command {
         let mut cmd = Command::new("p4");
         command_no_window(&mut cmd);
-        cmd.args([
-            "-C",
-            "utf8",
-            "-c",
-            &workspace.p4_client,
-            "-d",
-            &workspace.root_path,
-        ]);
+        // quick-260718-eje: globals via the shared helper — carries `-s`
+        // (script mode) first, so all 9 helper call sites get tagged output.
+        cmd.args(p4_global_args(workspace));
         cmd.args(args);
         cmd.stdin(Stdio::null());
         cmd
@@ -615,18 +643,14 @@ impl P4Executor {
         );
         let args_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
 
-        // Build command with -I global flag for progress indicators
+        // Build command with -I global flag for progress indicators.
+        // quick-260718-eje: keep `-I` (inert on a pipe; dropping it is a
+        // separate user decision — it silently disables --parallel), and add
+        // `-s` via the shared globals so every stdout line is severity-tagged.
         let mut cmd = Command::new("p4");
         command_no_window(&mut cmd);
-        cmd.args([
-            "-I",
-            "-C",
-            "utf8",
-            "-c",
-            &workspace.p4_client,
-            "-d",
-            &workspace.root_path,
-        ]);
+        cmd.arg("-I");
+        cmd.args(p4_global_args(workspace));
         cmd.args(&args_refs);
 
         let mut child = spawn_with_retry(
@@ -1513,10 +1537,27 @@ impl P4Executor {
             .map_err(AppError::ProcessSpawn)?;
 
         if !output.status.success() {
+            // quick-260718-eje: with `-s` the diagnostic may be routed onto
+            // stdout as `error:`-tagged lines (stderr empty) — fall back to
+            // those so the message stays informative.
             let stderr = String::from_utf8_lossy(&output.stderr);
+            let stderr = stderr.trim();
+            let detail = if !stderr.is_empty() {
+                stderr.to_string()
+            } else {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                stdout
+                    .lines()
+                    .filter_map(|line| match split_p4_severity(line) {
+                        (P4Severity::Error, rest) => Some(rest),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>()
+                    .join("; ")
+            };
             return Err(AppError::Process(format!(
                 "p4 changes failed: {}",
-                stderr.trim()
+                detail
             )));
         }
 

@@ -339,8 +339,11 @@ pub fn trace_command_sync_ok<T>(
 /// fixed here).
 pub fn render_spawned_line(pid: u32, root_path: &str, p4_args_joined: &str) -> String {
     let masked_root = crate::utils::redact::redact(root_path);
+    // Display string only — the actual spawned args are authoritative. `-s`
+    // added (quick-260718-eje): every p4 spawn now carries the global
+    // scripting-mode flag via p4_global_args.
     let assembled = format!(
-        "p4 -I -C utf8 -c <P4CLIENT> -d {} {}",
+        "p4 -I -s -C utf8 -c <P4CLIENT> -d {} {}",
         masked_root, p4_args_joined
     );
     let safe = crate::utils::redact::redact(&assembled);
