@@ -257,6 +257,10 @@ impl SyncOrchestrator {
         let _ = channel.send(SyncEvent::SyncCompleted {
             changelist: cl.clone(),
             files_synced,
+            // Phase 13: placeholder — Plan 13-02 threads the merged Vec
+            // (p4Sync + forceSync) through here. Empty for now so the build
+            // compiles; Phase 14 renders nothing when empty.
+            warnings: Vec::new(),
         });
         let _ = app.emit(
             "sync-state",
@@ -468,6 +472,10 @@ impl SyncOrchestrator {
         let _ = channel.send(SyncEvent::SyncCompleted {
             changelist: cl.clone(),
             files_synced,
+            // Phase 13: placeholder — Plan 13-02 threads the merged Vec
+            // (p4Sync + forceSync) through here. Empty for now so the build
+            // compiles.
+            warnings: Vec::new(),
         });
         let _ = app.emit(
             "sync-state",

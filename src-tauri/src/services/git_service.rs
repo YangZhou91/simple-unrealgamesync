@@ -381,6 +381,8 @@ impl GitService {
         let _ = channel.send(SyncEvent::SyncCompleted {
             changelist: None,
             files_synced: 0,
+            // Phase 13: git-pull has no p4 warning surface — always empty.
+            warnings: Vec::new(),
         });
 
         info!("[gitPull] completed successfully");
