@@ -2296,14 +2296,19 @@ pub enum DrainOrigin {
 /// Pure: no allocation on the no-path path; returns `String::new()` for any
 /// unrecognized shape so the caller's `entry(...).or_insert(...)` upserts
 /// under the empty-path sentinel.
+///
+/// Path recognition (CR-01): the pre-marker token is treated as a path ONLY
+/// when it STARTS WITH a depot root (`//`) or a Windows drive root (`X:\`).
+/// A bare `contains('\\')` heuristic was too loose — p4 prose such as
+/// `newline in '\r\n' detected - ...` contains a backslash but is not a path,
+/// and would have been stored verbatim as `WarningEntry.path` (bogus dedup
+/// key + bogus UI row). Start-anchoring on the real `<path> - <reason>`
+/// shape rejects that prose; misses fall through to the empty-path sentinel
+/// (safe — the raw line still lives in the scroll log / per-run log file).
 pub fn extract_warn_path(stripped: &str) -> String {
     if let Some(idx) = stripped.find(" - ") {
         let candidate = &stripped[..idx];
-        // Defensive: only treat the pre-marker token as a path if it looks
-        // like a depot (`//...`) or contains a Windows drive separator (`\`).
-        // Otherwise it's a non-path ` - ` inside an unrelated message — fall
-        // through to the empty-path sentinel.
-        if candidate.starts_with("//") || candidate.contains('\\') {
+        if candidate.starts_with("//") || starts_with_drive_root(candidate) {
             return candidate
                 .rsplit_once('#')
                 .map(|(p, _)| p.to_string())
@@ -2311,6 +2316,14 @@ pub fn extract_warn_path(stripped: &str) -> String {
         }
     }
     String::new()
+}
+
+/// `true` if `s` begins with a Windows drive root — ASCII letter, `:`, `\`
+/// (e.g. `D:\FYDepot\...`). Used by `extract_warn_path` to recognize local
+/// workspace paths without matching backslashes inside prose.
+fn starts_with_drive_root(s: &str) -> bool {
+    let b = s.as_bytes();
+    b.len() >= 3 && b[0].is_ascii_alphabetic() && b[1] == b':' && b[2] == b'\\'
 }
 
 /// One-per-drain warning aggregator (Phase 13 WARN-15..AGG-20). Owns a
@@ -3905,6 +3918,33 @@ exit: 0
         // Pathless pattern (no ` - ` marker, no `//` prefix) -> empty sentinel.
         assert_eq!(extract_warn_path("Library file missing."), "");
         assert_eq!(extract_warn_path(""), "");
+    }
+
+    #[test]
+    fn test_extract_warn_path_local_drive_root() {
+        // CR-01: a local workspace path (Windows drive root) before ` - ` is
+        // recognized just like a depot path. Trailing `#rev` glue stripped.
+        assert_eq!(
+            extract_warn_path("D:\\FYDepot\\FY\\Content\\X.uasset#7 - no such file(s)."),
+            "D:\\FYDepot\\FY\\Content\\X.uasset"
+        );
+    }
+
+    #[test]
+    fn test_extract_warn_path_rejects_backslash_prose() {
+        // CR-01 regression: a backslash inside p4 PROSE is not a path. Lines
+        // like `newline in '\r\n' detected - <foo>` contain `\` but no
+        // depot/drive root at the start, so they must fall through to the
+        // empty-path sentinel instead of being stored as WarningEntry.path.
+        assert_eq!(
+            extract_warn_path("newline in '\\r\\n' detected - something"),
+            ""
+        );
+        // Prose wrapper with an embedded drive path is also rejected at the
+        // start-anchor (the path is not at position 0).
+        assert_eq!(extract_warn_path("WC path 'D:\\foo' conflicts - bar"), "");
+        // Plain prose with no backslash and no root stays rejected.
+        assert_eq!(extract_warn_path("some prose here - trailing"), "");
     }
 
     #[test]
