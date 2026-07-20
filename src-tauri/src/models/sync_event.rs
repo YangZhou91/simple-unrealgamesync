@@ -4,10 +4,10 @@ use serde::{Deserialize, Serialize};
 /// lowercase wire strings `"warning"` / `"error"` so Phase 14 can hand-write a
 /// matching TypeScript union `"warning" | "error"` (PATTERNS.md Pattern A).
 ///
-/// Eq + Copy are load-bearing: the `WarningCollector` dedup key is
+/// Eq + Copy + Hash are load-bearing: the `WarningCollector` dedup key is
 /// `(String, WarningSeverity)` (D-01) and `Copy` lets the classify match in
-/// `ingest()` bind by value.
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
+/// `ingest()` bind by value. `Hash` is required for HashMap key.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Serialize, Deserialize)]
 pub enum WarningSeverity {
     #[serde(rename = "warning")]
     Warning,

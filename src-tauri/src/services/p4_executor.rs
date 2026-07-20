@@ -1,10 +1,11 @@
 use crate::error::AppError;
-use crate::models::{ChangelistEntry, SyncEvent, WorkspaceConfig};
+use crate::models::{ChangelistEntry, SyncEvent, WarningEntry, WarningSeverity, WorkspaceConfig};
 use crate::services::disk_usage_sampler::DiskUsageSampler;
 use crate::services::process_manager::ProcessManager;
 use crate::utils::counting_channel::CountingChannel;
 use crate::utils::log::{render_cancelled_line, render_exited_line, render_spawned_line, scope_run_with, RUN_ID, StepScope};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::path::Path;
 use std::process::Stdio;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -2146,6 +2147,220 @@ const RECONCILE_MARKERS_NOT_IN_DEPOT: &[&str] = &[" - added as ", " - add "];
 const RECONCILE_MARKERS_MISSING_ON_DISK: &[&str] = &[" - deleted as ", " - delete "];
 const RECONCILE_MARKERS_DIFFERS: &[&str] = &[" - editing ", " - edited", " - edit "];
 
+/// The 4 supplemental sync-warning patterns p4 emits on exit-0-but-noisy
+/// syncs. Tail-matched on the severity-stripped remainder AFTER
+/// `split_p4_severity`. Live-confirmed (Phase 13 RESEARCH 2026-07-20):
+///   `warning: <path> - file(s) not in client view.`  (no such file(s) family)
+///   `warning: <path> - protected`                    (perms block)
+///   `warning: <path> - currently opened`             (open-for-add)
+///   `Library file missing.`                          (UE build, pathless)
+///
+/// DISTINCT from `RECONCILE_MARKERS_*` above — those are for the `p4 reconcile
+/// -n -l` workspace-health audit, NOT for `p4 sync` warnings. Do NOT merge the
+/// lists.
+///
+/// CRITICAL (Phase 13 RESEARCH Pitfall 1): the `info1:` framing in CONTEXT.md
+/// and ROADMAP.md is WRONG. Live-probe confirms this user's p4 (Perforce 2023
+/// build) emits ZERO `info1:` lines; reconcile warnings ride the `warning:`
+/// tag that `split_p4_severity` ALREADY recognizes. The UNION capture rule
+/// `(severity in {Warning, Error}) OR (stripped contains any pattern)` is
+/// belt-and-suspenders — do NOT add an `info1:` branch to `split_p4_severity`.
+pub const RECONCILE_WARN_PATTERNS: &[&str] = &[
+    " - no such file(s)",
+    " - protected",
+    " - currently opened",
+    "Library file missing",
+];
+
+/// D-04 cap on the per-run `SyncCompleted.warnings` payload size. Keep the
+/// top-500 `(path, severity)` buckets by occurrence count; a synthetic
+/// `<truncated>` row is appended when the pre-cap size exceeded 500. Bounds
+/// the one-shot IPC payload regardless of input volume (logline-ipc-flood.md
+/// lesson).
+pub const MAX_WARNINGS: usize = 500;
+
+/// Which drain a line came from. Determines the base severity before the
+/// `-s` tag is consulted: stderr forces `Error` (WARN-16), stdout uses the
+/// `split_p4_severity` tag result.
+#[derive(Clone, Copy, Debug)]
+pub enum DrainOrigin {
+    Stdout,
+    Stderr,
+}
+
+/// Extract the depot/local path from a severity-stripped reconcile-warn line.
+/// Mirrors the `extract_sync_file_path` shape (p4_executor.rs:1961). Path is
+/// BEFORE the ` - <action>` marker; trailing `#rev` glue stripped. Pathless
+/// patterns (`Library file missing.`) return an empty string sentinel — the
+/// dedup key for that one pattern is `("", Warning)`.
+///
+/// Pure: no allocation on the no-path path; returns `String::new()` for any
+/// unrecognized shape so the caller's `entry(...).or_insert(...)` upserts
+/// under the empty-path sentinel.
+pub fn extract_warn_path(stripped: &str) -> String {
+    if let Some(idx) = stripped.find(" - ") {
+        let candidate = &stripped[..idx];
+        // Defensive: only treat the pre-marker token as a path if it looks
+        // like a depot (`//...`) or contains a Windows drive separator (`\`).
+        // Otherwise it's a non-path ` - ` inside an unrelated message — fall
+        // through to the empty-path sentinel.
+        if candidate.starts_with("//") || candidate.contains('\\') {
+            return candidate
+                .rsplit_once('#')
+                .map(|(p, _)| p.to_string())
+                .unwrap_or_else(|| candidate.to_string());
+        }
+    }
+    String::new()
+}
+
+/// One-per-drain warning aggregator (Phase 13 WARN-15..AGG-20). Owns a
+/// `HashMap<(String, WarningSeverity), WarningEntry>` (D-01 dedup key) plus a
+/// raw `total_lines` counter for the truncator message. Each drain task
+/// (`sync()` stdout/stderr + `force_sync_engine()` stdout/stderr) owns ONE
+/// collector — no `Arc`/`Mutex` on the hot loop (Pitfall 4). On drain EOF,
+/// `finalize()` returns the bounded, deduped `Vec<WarningEntry>`.
+///
+/// Panic-safety (WARN-17): `ingest()`/`ingest_entry()` use the HashMap entry
+/// API + `saturating_add` + `str::contains`. No `unwrap`/`?`/`panic!` on
+/// parse — a garbage/empty/non-UTF8/giant line is silently skipped or safely
+/// bucketed under the empty-path sentinel. The collection code is wrapped by
+/// the existing `catch_unwind_future` on all four drain spawns (Plan 13-02),
+/// so even a forced panic is caught + logged, never propagated.
+pub struct WarningCollector {
+    buckets: HashMap<(String, WarningSeverity), WarningEntry>,
+    total_lines: u64,
+}
+
+impl WarningCollector {
+    pub fn new() -> Self {
+        Self {
+            buckets: HashMap::with_capacity(64),
+            total_lines: 0,
+        }
+    }
+
+    /// Ingest one raw drain line. `drain_origin` determines the base severity
+    /// when the `-s` tag alone is insufficient (stderr -> always Error).
+    /// Capture rule (RESEARCH §"Severity assignment rule"):
+    ///   `(severity in {Warning, Error}) OR (stripped contains any pattern)`
+    /// union with the RECONCILE_WARN_PATTERNS tail match — defense in depth
+    /// even though `info1:` is never emitted live (RESEARCH Pitfall 1).
+    /// Benign ` - file(s) up-to-date.` / ` - no file(s) to reconcile.` lines
+    /// are filtered out (RESEARCH Pitfall 2). The terminal `exit: <code>` line
+    /// is NEVER captured (Exit is not a Warning/Error base and has no pattern).
+    pub fn ingest(&mut self, raw_line: &str, drain_origin: DrainOrigin) {
+        self.total_lines = self.total_lines.saturating_add(1);
+        let (severity, stripped) = split_p4_severity(raw_line);
+        // Base severity from drain + tag. `Exit`/`Info`/`Text` map to None —
+        // they capture ONLY via the pattern right-arm of the UNION (so a
+        // hypothetical `info: ... - no such file(s)` is still caught; an
+        // `exit: 0` with no pattern is not).
+        let base: Option<WarningSeverity> = match drain_origin {
+            DrainOrigin::Stderr => Some(WarningSeverity::Error),
+            DrainOrigin::Stdout => match severity {
+                P4Severity::Error => Some(WarningSeverity::Error),
+                P4Severity::Warning => Some(WarningSeverity::Warning),
+                // Info/Exit/Text — capture-via-tag is OFF; the pattern arm of
+                // the UNION below still fires if the tail matches.
+                P4Severity::Info | P4Severity::Exit | P4Severity::Text => None,
+            },
+        };
+        // PITFALL 2 benign-noise filter (applies regardless of drain origin).
+        if stripped.contains(" - file(s) up-to-date.")
+            || stripped.contains(" - no file(s) to reconcile.")
+        {
+            return;
+        }
+        // Capture rule: base in {Warning, Error} OR tail-pattern match.
+        let matched = matches!(base, Some(WarningSeverity::Warning) | Some(WarningSeverity::Error))
+            || RECONCILE_WARN_PATTERNS.iter().any(|p| stripped.contains(p));
+        if !matched {
+            return;
+        }
+        // Final severity: stdout Info+pattern -> Warning (promoted); Error
+        // stays Error; Warning stays Warning.
+        let final_sev = match base {
+            Some(WarningSeverity::Error) => WarningSeverity::Error,
+            _ => WarningSeverity::Warning,
+        };
+        let path = extract_warn_path(stripped);
+        let key = (path.clone(), final_sev);
+        let bucket = self.buckets.entry(key).or_insert(WarningEntry {
+            severity: final_sev,
+            path,
+            message: stripped.to_string(), // D-02: first-seen wins (or_insert)
+            count: 0,
+        });
+        bucket.count = bucket.count.saturating_add(1);
+    }
+
+    /// Sibling of `ingest()` — takes a PRE-BUCKETED `WarningEntry` (from a
+    /// previously finalized list). Used by `merge_warning_lists`. On existing
+    /// bucket: count climbs via `saturating_add`. On new bucket: the incoming
+    /// message wins (first-seen across the FIRST list — `or_insert` only
+    /// fires on empty buckets, so the caller's list order determines which
+    /// message survives).
+    pub fn ingest_entry(&mut self, entry: WarningEntry) {
+        let key = (entry.path.clone(), entry.severity);
+        let bucket = self.buckets.entry(key).or_insert(WarningEntry {
+            severity: entry.severity,
+            path: entry.path.clone(),
+            message: entry.message.clone(),
+            count: 0,
+        });
+        bucket.count = bucket.count.saturating_add(entry.count);
+    }
+
+    /// Finalize: sort by count desc, path asc tiebreak (Pitfall 7), truncate
+    /// to `MAX_WARNINGS`, append a synthetic `<truncated>` row when the
+    /// pre-cap size exceeded the cap (D-04). Empty collector -> empty Vec
+    /// (Phase 14 silent-UI contract).
+    pub fn finalize(self) -> Vec<WarningEntry> {
+        let mut entries: Vec<WarningEntry> = self.buckets.into_values().collect();
+        entries.sort_by(|a, b| b.count.cmp(&a.count).then_with(|| a.path.cmp(&b.path)));
+        if entries.len() > MAX_WARNINGS {
+            let suppressed = entries.len() - MAX_WARNINGS;
+            entries.truncate(MAX_WARNINGS);
+            entries.push(WarningEntry {
+                severity: WarningSeverity::Warning,
+                path: "<truncated>".to_string(),
+                message: format!(
+                    "+{} more paths suppressed ({} total warnings from {} distinct buckets)",
+                    suppressed, self.total_lines, MAX_WARNINGS,
+                ),
+                count: suppressed as u64,
+            });
+        }
+        entries
+    }
+}
+
+impl Default for WarningCollector {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Pure-fn test seam for the orchestrator merge (RESEARCH §"Test Seam for
+/// Merge Across Two Drains Without Live p4"). Given an iterator of
+/// pre-finalized `Vec<WarningEntry>` lists (one per drain), re-bucket by
+/// `(path, severity)` and re-cap at 500 + truncator (Open Question 2 =
+/// yes, recap after merge).
+///
+/// Plan 13-02 calls this at the two `SyncCompleted` emission sites
+/// (`run_pipeline_inner` + `rollback_pipeline_inner`) with
+/// `merge_warning_lists([p4_warnings, force_warnings])`.
+pub fn merge_warning_lists(lists: impl IntoIterator<Item = Vec<WarningEntry>>) -> Vec<WarningEntry> {
+    let mut collector = WarningCollector::new();
+    for list in lists {
+        for entry in list {
+            collector.ingest_entry(entry);
+        }
+    }
+    collector.finalize()
+}
+
 /// Parse one `p4 reconcile -n -l` stdout line into (category, project-relative path).
 ///
 /// Returns None for summary/info lines (`... file(s) up-to-date.`, empty, or
@@ -3506,5 +3721,345 @@ exit: 0
                 elapsed.as_millis()
             );
         });
+    }
+
+    // --- Phase 13 (13-01): WarningCollector classifier + dedup + cap + merge ---
+
+    #[test]
+    fn test_warning_collector_warn_tagged() {
+        // WARN-15: warning:-tagged reconcile line classifies to (path, Warning)
+        // with the severity-stripped line as message, count 1.
+        let mut c = WarningCollector::new();
+        c.ingest(
+            "warning: //FY_Depot/.../X.uasset - no such file(s).",
+            DrainOrigin::Stdout,
+        );
+        let out = c.finalize();
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].severity, WarningSeverity::Warning);
+        assert_eq!(out[0].count, 1);
+        assert_eq!(out[0].path, "//FY_Depot/.../X.uasset");
+        assert_eq!(out[0].message, "//FY_Depot/.../X.uasset - no such file(s).");
+    }
+
+    #[test]
+    fn test_reconcile_patterns_4() {
+        // WARN-15: each of the 4 RECONCILE_WARN_PATTERNS matched individually
+        // when wrapped in a synthetic "warning: <prefix><pattern>" line.
+        let patterns = [
+            " - no such file(s)",
+            " - protected",
+            " - currently opened",
+            "Library file missing",
+        ];
+        for p in &patterns {
+            let mut c = WarningCollector::new();
+            c.ingest(&format!("warning: //depot/p{p}"), DrainOrigin::Stdout);
+            let out = c.finalize();
+            assert_eq!(
+                out.len(),
+                1,
+                "pattern {p:?} should be individually matched"
+            );
+        }
+    }
+
+    #[test]
+    fn test_warning_collector_tail_pattern_union() {
+        // WARN-15 defense-in-depth: an `info:`-tagged line (severity Info, NOT
+        // Warning) whose tail matches a RECONCILE_WARN_PATTERN is STILL captured
+        // via the UNION right arm and promoted to Warning severity. The
+        // `info1:` framing in CONTEXT/ROADMAP is wrong (RESEARCH Pitfall 1) —
+        // reconcile warnings ride `warning:` in practice, but the UNION rule
+        // is the safety net.
+        let mut c = WarningCollector::new();
+        c.ingest(
+            "info: //depot/p - no such file(s)",
+            DrainOrigin::Stdout,
+        );
+        let out = c.finalize();
+        assert_eq!(out.len(), 1, "UNION right arm must capture info+pattern");
+        assert_eq!(out[0].severity, WarningSeverity::Warning);
+        assert_eq!(out[0].count, 1);
+    }
+
+    #[test]
+    fn test_extract_warn_path_no_such_file() {
+        // Path is BEFORE the ` - ` marker; trailing `#rev` stripped.
+        assert_eq!(
+            extract_warn_path("//depot/dir/X.uasset#3 - no such file(s)."),
+            "//depot/dir/X.uasset"
+        );
+    }
+
+    #[test]
+    fn test_extract_warn_path_protected() {
+        // Same shape for the ` - protected` pattern.
+        assert_eq!(
+            extract_warn_path("//depot/dir/Y.cpp#1 - protected"),
+            "//depot/dir/Y.cpp"
+        );
+    }
+
+    #[test]
+    fn test_extract_warn_path_pathless_returns_empty() {
+        // Pathless pattern (no ` - ` marker, no `//` prefix) -> empty sentinel.
+        assert_eq!(extract_warn_path("Library file missing."), "");
+        assert_eq!(extract_warn_path(""), "");
+    }
+
+    #[test]
+    fn test_library_file_missing_pathless() {
+        // WARN-15: pathless "Library file missing." buckets under path == "".
+        let mut c = WarningCollector::new();
+        c.ingest("warning: Library file missing.", DrainOrigin::Stdout);
+        let out = c.finalize();
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].path, "");
+        assert_eq!(out[0].severity, WarningSeverity::Warning);
+    }
+
+    #[test]
+    fn test_benign_uptodate_filtered() {
+        // RESEARCH Pitfall 2: "file(s) up-to-date." is BENIGN informational
+        // noise (sync on already-synced file); MUST be filtered out.
+        let mut c = WarningCollector::new();
+        c.ingest(
+            "warning: //depot/p - file(s) up-to-date.",
+            DrainOrigin::Stdout,
+        );
+        let out = c.finalize();
+        assert!(out.is_empty(), "benign up-to-date must be filtered: {out:?}");
+    }
+
+    #[test]
+    fn test_benign_no_file_to_reconcile_filtered() {
+        // RESEARCH Pitfall 2 sibling: "no file(s) to reconcile." is benign.
+        let mut c = WarningCollector::new();
+        c.ingest(
+            "warning: //depot/p - no file(s) to reconcile.",
+            DrainOrigin::Stdout,
+        );
+        let out = c.finalize();
+        assert!(
+            out.is_empty(),
+            "benign no-file-to-reconcile must be filtered: {out:?}"
+        );
+    }
+
+    #[test]
+    fn test_exit_line_never_captured() {
+        // The terminal `exit: <code>` line must never be captured.
+        let mut c = WarningCollector::new();
+        c.ingest("exit: 0", DrainOrigin::Stdout);
+        c.ingest("exit: 1", DrainOrigin::Stdout);
+        assert!(c.finalize().is_empty());
+    }
+
+    #[test]
+    fn test_stderr_severity_error() {
+        // WARN-16: stderr forces Error severity regardless of tag content.
+        let mut c = WarningCollector::new();
+        c.ingest("info: some soft stderr line", DrainOrigin::Stderr);
+        let out = c.finalize();
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].severity, WarningSeverity::Error);
+    }
+
+    #[test]
+    fn test_stdout_error_tag_severity() {
+        // WARN-16: stdout `error:` tag -> Error severity.
+        let mut c = WarningCollector::new();
+        c.ingest("error: //depot/p - boom", DrainOrigin::Stdout);
+        let out = c.finalize();
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].severity, WarningSeverity::Error);
+    }
+
+    #[test]
+    fn test_ingest_garbage_no_panic() {
+        // WARN-17 fault injection: ingest must never panic on garbage/empty/
+        // non-UTF8-lossy/giant/NUL-only/marker-without-path lines. Each line
+        // is either silently skipped or safely bucketed.
+        let mut c = WarningCollector::new();
+        let giant = "x".repeat(64 * 1024);
+        let non_utf8_lossy =
+            String::from_utf8_lossy(&[0xff, 0xfe]).to_string() + " - no such file(s)";
+        let fixture: Vec<String> = vec![
+            String::new(),
+            giant,
+            "\0".to_string(),
+            " - no path here".to_string(),
+            non_utf8_lossy,
+            "warning: //depot/ok - no such file(s).".to_string(),
+        ];
+        for line in &fixture {
+            // MUST NOT panic — test fails by panicking inside the closure.
+            c.ingest(line, DrainOrigin::Stdout);
+        }
+        // The one well-formed warning line landed in one bucket; the rest
+        // silently skipped or bucketed under empty path. No assertions on the
+        // exact output — only the panic-safety contract.
+        let _ = c.finalize();
+    }
+
+    #[test]
+    fn test_dedup_same_path_same_sev() {
+        // AGG-19 D-01: 5 identical lines for the same path collapse to 1
+        // bucket with count 5; first-seen message preserved (D-02).
+        let mut c = WarningCollector::new();
+        for _ in 0..5 {
+            c.ingest(
+                "warning: //depot/p - no such file(s).",
+                DrainOrigin::Stdout,
+            );
+        }
+        let out = c.finalize();
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].count, 5);
+        assert_eq!(out[0].message, "//depot/p - no such file(s).");
+    }
+
+    #[test]
+    fn test_dedup_path_sev_boundary() {
+        // AGG-19 D-01 boundary: same path producing BOTH a warning and an
+        // error yields 2 buckets (severity is part of the dedup key).
+        let mut c = WarningCollector::new();
+        c.ingest(
+            "warning: //depot/p - no such file(s).",
+            DrainOrigin::Stdout,
+        );
+        c.ingest("error: //depot/p - boom", DrainOrigin::Stdout);
+        let out = c.finalize();
+        assert_eq!(out.len(), 2);
+        let sev_counts = (
+            out.iter().filter(|e| e.severity == WarningSeverity::Warning).count(),
+            out.iter().filter(|e| e.severity == WarningSeverity::Error).count(),
+        );
+        assert_eq!(sev_counts, (1, 1));
+    }
+
+    #[test]
+    fn test_hard_cap_500_truncator() {
+        // AGG-19 D-04: >500 distinct (path, severity) buckets -> finalize()
+        // yields exactly 501 entries (500 capped + 1 truncator). The truncator
+        // has path == "<truncated>", severity Warning, count == (pre_cap - 500).
+        let mut c = WarningCollector::new();
+        for i in 0..600u32 {
+            c.ingest(
+                &format!("warning: //depot/p{i} - no such file(s)."),
+                DrainOrigin::Stdout,
+            );
+        }
+        let out = c.finalize();
+        assert_eq!(out.len(), MAX_WARNINGS + 1);
+        let truncator = out.last().expect("truncator row present");
+        assert_eq!(truncator.path, "<truncated>");
+        assert_eq!(truncator.severity, WarningSeverity::Warning);
+        assert_eq!(truncator.count, (600 - MAX_WARNINGS) as u64);
+    }
+
+    #[test]
+    fn test_empty_run_returns_empty_vec() {
+        // AGG-19 Phase 14 silent-UI contract: empty collector -> empty Vec.
+        let c = WarningCollector::new();
+        assert!(c.finalize().is_empty());
+    }
+
+    #[test]
+    fn test_count_saturates_no_overflow() {
+        // Pitfall 5: pathological repeat of the same key cannot overflow.
+        // We ingest the same line 1_000_000 times — count climbs to 1_000_000
+        // (well under u64::MAX saturation) and MUST NOT panic. The contract
+        // under test is panic-safety, not actually hitting the saturation cap.
+        let mut c = WarningCollector::new();
+        for _ in 0..1_000_000u64 {
+            c.ingest(
+                "warning: //depot/p - no such file(s).",
+                DrainOrigin::Stdout,
+            );
+        }
+        let out = c.finalize();
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].count, 1_000_000);
+    }
+
+    #[test]
+    fn test_sort_tiebreak_deterministic() {
+        // Pitfall 7: two paths with identical counts -> finalize() orders them
+        // lexicographically by path asc (stable across runs).
+        let mut c = WarningCollector::new();
+        // Ingest in reverse-lex order so the sort must actually reorder them.
+        c.ingest(
+            "warning: //depot/zzz - no such file(s).",
+            DrainOrigin::Stdout,
+        );
+        c.ingest(
+            "warning: //depot/aaa - no such file(s).",
+            DrainOrigin::Stdout,
+        );
+        let out = c.finalize();
+        assert_eq!(out.len(), 2);
+        // Both have count 1; tiebreak is path asc, so aaa comes first.
+        assert_eq!(out[0].path, "//depot/aaa");
+        assert_eq!(out[1].path, "//depot/zzz");
+    }
+
+    #[test]
+    fn test_merge_two_collectors() {
+        // AGG-18 pure-fn test seam: merge two pre-formed Vec<WarningEntry>
+        // with the same (path, severity) — count sums, first-seen message
+        // preserved (from the FIRST list).
+        let list_a = vec![WarningEntry {
+            severity: WarningSeverity::Warning,
+            path: "//depot/a".into(),
+            message: "//depot/a - no such file(s).".into(),
+            count: 3,
+        }];
+        let list_b = vec![WarningEntry {
+            severity: WarningSeverity::Warning,
+            path: "//depot/a".into(),
+            message: "//depot/a - DUPE later message".into(),
+            count: 2,
+        }];
+        let merged = merge_warning_lists([list_a, list_b]);
+        assert_eq!(merged.len(), 1);
+        assert_eq!(merged[0].count, 5);
+        // First-seen message (from list_a) wins.
+        assert_eq!(merged[0].message, "//depot/a - no such file(s).");
+    }
+
+    #[test]
+    fn test_orchestrator_merge_recaps() {
+        // Open Question 2: merge re-applies the 500 cap + truncator to the
+        // POST-merge list. Two lists whose union exceeds 500 distinct paths
+        // are re-capped at 500 + a truncator row.
+        let mut list_a = Vec::new();
+        for i in 0..300u32 {
+            list_a.push(WarningEntry {
+                severity: WarningSeverity::Warning,
+                path: format!("//depot/a{i}"),
+                message: format!("//depot/a{i} - no such file(s)."),
+                count: 1,
+            });
+        }
+        let mut list_b = Vec::new();
+        for i in 0..300u32 {
+            list_b.push(WarningEntry {
+                severity: WarningSeverity::Warning,
+                path: format!("//depot/b{i}"),
+                message: format!("//depot/b{i} - no such file(s)."),
+                count: 1,
+            });
+        }
+        let merged = merge_warning_lists([list_a, list_b]);
+        assert_eq!(
+            merged.len(),
+            MAX_WARNINGS + 1,
+            "merge must re-cap at MAX_WARNINGS + truncator"
+        );
+        let truncator = merged.last().expect("truncator present");
+        assert_eq!(truncator.path, "<truncated>");
+        assert_eq!(truncator.count, (600 - MAX_WARNINGS) as u64);
     }
 }
