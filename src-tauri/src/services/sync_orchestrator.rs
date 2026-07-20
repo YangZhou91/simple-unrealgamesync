@@ -1,7 +1,7 @@
 use crate::error::AppError;
-use crate::models::{HistoryRecord, SyncEvent, WorkspaceConfig};
+use crate::models::{HistoryRecord, SyncEvent, WarningEntry, WorkspaceConfig};
 use crate::services::history::HistoryService;
-use crate::services::p4_executor::{validate_target_cl, P4Executor, SyncOptions};
+use crate::services::p4_executor::{merge_warning_lists, validate_target_cl, P4Executor, SyncOptions};
 use crate::services::process_manager::ProcessManager;
 use crate::services::workspace::WorkspaceService;
 use crate::utils::counting_channel::CountingChannel;
@@ -201,27 +201,32 @@ impl SyncOrchestrator {
             );
             return Err(e);
         }
-        let files_synced = files_result.unwrap();
+        let (files_synced, p4_warnings) = files_result.unwrap();
         step.done(&format!("files_synced={files_synced}"));
 
         // Step 3b: Force sync Engine files (non-fatal, per D-03)
         // Only runs when an explicit changelist is provided. An empty changelist
         // means a lightweight project-only update — skip the Engine force sync
         // entirely (and emit no forceSync events) per FORCESYNC-COND-01.
-        if should_force_sync_engine(target_cl.as_deref(), include_engine) {
+        let force_warnings: Vec<WarningEntry> = if should_force_sync_engine(target_cl.as_deref(), include_engine) {
             let step = StepScope::new("forceSync");
             let force_cancel = CancellationToken::new();
             self.process_manager
                 .set_cancel_token(force_cancel.clone())
                 .await;
-            let _ = self
+            // AGG-18: capture the force-sync warnings; force-sync is non-fatal
+            // (returns Ok(((), Vec::new())) on its own failure path — D-06 spirit).
+            let (_, warnings) = self
                 .force_sync_engine_step(&workspace, &channel, force_cancel, &app)
-                .await;
+                .await
+                .unwrap_or(((), Vec::new()));
             self.process_manager.clear_tracked().await;
             step.done("");
+            warnings
         } else {
             info!("[sync] step=forceSync skipped (no target changelist, or engine opt-out)");
-        }
+            Vec::new()
+        };
 
         // Step 4: GenerateProjectFiles
         let step = StepScope::new("genProject");
@@ -254,13 +259,14 @@ impl SyncOrchestrator {
             "[sync] pipeline complete, cl={}, files={files_synced}",
             cl.as_deref().unwrap_or("none")
         );
+        // AGG-18 / AGG-19 / AGG-20: merge p4Sync + forceSync warnings (recap
+        // at 500 internally) and surface on SyncCompleted. Empty Vec when p4
+        // emitted no qualifying lines (Phase 14 silent-UI contract).
+        let merged = merge_warning_lists([p4_warnings, force_warnings]);
         let _ = channel.send(SyncEvent::SyncCompleted {
             changelist: cl.clone(),
             files_synced,
-            // Phase 13: placeholder — Plan 13-02 threads the merged Vec
-            // (p4Sync + forceSync) through here. Empty for now so the build
-            // compiles; Phase 14 renders nothing when empty.
-            warnings: Vec::new(),
+            warnings: merged,
         });
         let _ = app.emit(
             "sync-state",
@@ -434,7 +440,7 @@ impl SyncOrchestrator {
             );
             return Err(e);
         }
-        let files_synced = files_result.unwrap();
+        let (files_synced, p4_warnings) = files_result.unwrap();
         step.done(&format!("files_synced={files_synced}"));
 
         // Step 2b: Force sync Engine files (non-fatal, per D-04)
@@ -443,9 +449,12 @@ impl SyncOrchestrator {
         self.process_manager
             .set_cancel_token(force_cancel.clone())
             .await;
-        let _ = self
+        // AGG-18: rollback ALWAYS force-syncs (include_engine:true hardcoded),
+        // so the merge below always has both p4_warnings + force_warnings.
+        let (_, force_warnings) = self
             .force_sync_engine_step(&workspace, &channel, force_cancel, &app)
-            .await;
+            .await
+            .unwrap_or(((), Vec::new()));
         self.process_manager.clear_tracked().await;
         step.done("");
 
@@ -469,13 +478,13 @@ impl SyncOrchestrator {
         step.done("");
 
         let cl = Some(target_cl.clone());
+        // AGG-18 / AGG-19 / AGG-20: merge p4Sync + forceSync warnings and
+        // surface on SyncCompleted (same pure-fn merge as the forward path).
+        let merged = merge_warning_lists([p4_warnings, force_warnings]);
         let _ = channel.send(SyncEvent::SyncCompleted {
             changelist: cl.clone(),
             files_synced,
-            // Phase 13: placeholder — Plan 13-02 threads the merged Vec
-            // (p4Sync + forceSync) through here. Empty for now so the build
-            // compiles.
-            warnings: Vec::new(),
+            warnings: merged,
         });
         let _ = app.emit(
             "sync-state",
@@ -588,7 +597,7 @@ impl SyncOrchestrator {
                     .await;
                 self.process_manager.clear_tracked().await;
                 match result {
-                    Ok(n) => s.done(&format!("files_synced={n}")),
+                    Ok((n, _warnings)) => s.done(&format!("files_synced={n}")),
                     Err(AppError::Cancelled) => {
                         s.cancelled();
                         return Err(AppError::Cancelled);
@@ -761,7 +770,7 @@ impl SyncOrchestrator {
         cancel: CancellationToken,
         options: &SyncOptions,
         app: &AppHandle,
-    ) -> Result<u64, AppError> {
+    ) -> Result<(u64, Vec<WarningEntry>), AppError> {
         let description = match &options.target_cl {
             Some(cl) => format!("Syncing to CL #{}...", cl),
             None => "Syncing from Perforce...".to_string(),
@@ -843,7 +852,7 @@ impl SyncOrchestrator {
         // Mirrors commands/log.rs:current_log_path's app_log_dir() resolution.
         let sync_log_dir: Option<PathBuf> = app.path().app_log_dir().ok();
 
-        let files_synced = self
+        let sync_result = self
             .p4
             .sync(
                 workspace,
@@ -862,7 +871,7 @@ impl SyncOrchestrator {
         // event never shows current > total when the real sync outruns the
         // dry-run estimate (e.g. new CLs landed between preview and actual sync).
         let dry_run_total = total.load(Ordering::Relaxed);
-        let actual_count = files_synced.as_ref().copied().unwrap_or(0);
+        let actual_count = sync_result.as_ref().map(|(n, _)| *n).unwrap_or(0);
         let clamped_total = dry_run_total.max(actual_count);
         if clamped_total > 0 {
             let _ = channel.send(SyncEvent::Progress {
@@ -877,21 +886,25 @@ impl SyncOrchestrator {
 
         let _ = channel.send(SyncEvent::StepCompleted {
             step: "p4Sync".to_string(),
-            success: files_synced.is_ok(),
+            success: sync_result.is_ok(),
         });
 
-        files_synced
+        // AGG-18: propagate the tuple `(files_synced, warnings)` to the caller.
+        // On Err the orchestrator's Err arm drops warnings (D-06).
+        sync_result
     }
 
     /// Non-fatal force sync step for Engine subtree.
-    /// Always returns Ok(()) — logs and reports status but cannot fail the pipeline (per D-07).
+    /// Always returns Ok — logs and reports status but cannot fail the pipeline (per D-07).
+    /// Phase 13 AGG-18: returns `((), warnings)` on success; on Err (force-sync non-fatal
+    /// failure), returns `Ok(((), Vec::new()))` — warnings dropped consistent with D-06.
     async fn force_sync_engine_step(
         &self,
         workspace: &WorkspaceConfig,
         channel: &CountingChannel,
         cancel: CancellationToken,
         app: &AppHandle,
-    ) -> Result<(), AppError> {
+    ) -> Result<((), Vec<WarningEntry>), AppError> {
         // quick-260630-srw: resolve the per-run sync log dir here so force-sync
         // appends to the SAME sync-<run_id>.log the primary sync wrote (run_id
         // is shared via the task_local RUN_ID scope). Best-effort: None on
@@ -914,12 +927,12 @@ impl SyncOrchestrator {
             )
             .await
         {
-            Ok(()) => {
+            Ok(((), warnings)) => {
                 let _ = channel.send(SyncEvent::StepCompleted {
                     step: "forceSync".to_string(),
                     success: true,
                 });
-                Ok(())
+                Ok(((), warnings))
             }
             Err(e) => {
                 warn!("[forceSync] failed (non-fatal): {e}");
@@ -931,7 +944,9 @@ impl SyncOrchestrator {
                     step: "forceSync".to_string(),
                     success: false,
                 });
-                Ok(())
+                // D-06 spirit: force-sync failure drops warnings (the step's
+                // own error message is already surfaced as a LogLine above).
+                Ok(((), Vec::new()))
             }
         }
     }

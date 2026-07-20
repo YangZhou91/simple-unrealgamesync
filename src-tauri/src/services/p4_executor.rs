@@ -620,6 +620,17 @@ impl P4Executor {
     // Grouping into a builder would be disproportionate for a quick task (the
     // existing drain args are already coupled to the p4 spawn + IPC channel +
     // cancellation trio).
+    /// Phase 13 WARN-15/16/17 + AGG-18: returns `(files_synced, merged_warnings)`
+    /// on the exit-0 path. The 2 drain spawn closures inside this fn (stdout +
+    /// stderr) each own ONE `WarningCollector` — NO `Arc`/`Mutex` on the hot
+    /// loop (Pitfall 4). `collector.ingest()` is called per line INSIDE the
+    /// existing `catch_unwind_future` wrap so a panic is contained for FREE
+    /// (WARN-17 structural inheritance — no new wrap). On Err (cancel /
+    /// non-zero exit) the warnings are DROPPED (D-06 — exit-0 only).
+    /// `files_synced` + the p4 exit code stay owned by `child.wait()` — the
+    /// collection code does NOT touch them (SC#2). The drain closures return
+    /// their finalized `Vec<WarningEntry>`; the select! success arm merges the
+    /// two via `merge_warning_lists` (recap-at-500 internal) before returning.
     pub async fn sync(
         &self,
         workspace: &WorkspaceConfig,
@@ -630,7 +641,7 @@ impl P4Executor {
         process_manager: Option<Arc<ProcessManager>>,
         sync_log_dir: Option<std::path::PathBuf>,
         bytes_total: Option<u64>,
-    ) -> Result<u64, AppError> {
+    ) -> Result<(u64, Vec<WarningEntry>), AppError> {
         // Validate target_cl if provided
         if let Some(ref cl) = options.target_cl {
             validate_target_cl(cl)?;
@@ -717,6 +728,10 @@ impl P4Executor {
                 crate::utils::sync_run_log::SyncRunFileWriter::open(dir, id)
             })
             .unwrap_or_else(crate::utils::sync_run_log::SyncRunFileWriter::disabled);
+        // Phase 13 WARN-15: one WarningCollector per drain — single-owner
+        // capture moved INTO the spawn closure (no Arc/Mutex — Pitfall 4).
+        // Mirrors the existing fc/lps/sync_writer pattern.
+        let mut stdout_collector = WarningCollector::new();
         let stdout_task = tokio::spawn(async move {
             // Phase 12 / D-09: catch_unwind_future keeps a panic from silently
             // killing the drain while child.wait() in the select! below hangs on
@@ -727,13 +742,22 @@ impl P4Executor {
             // naive `catch_unwind(AssertUnwindSafe(async {...}))` shape does NOT
             // compile (catch_unwind requires FnOnce(), an async block is a Future);
             // the helper polls the inner future inside catch_unwind instead.
-            if let Err(payload) = crate::utils::log::catch_unwind_future(async move {
-                scope_run_with(run_id, async move {
-                    let mut lines = stdout_reader.lines();
-                    let mut log_buf: Vec<String> = Vec::with_capacity(500);
-                    let mut last_log_flush = std::time::Instant::now();
-                    while let Ok(Some(line)) = lines.next_line().await {
-                        let current = if parse_sync_file_count(&line) > 0 {
+            //
+            // WARN-17: collector.ingest() lives INSIDE this wrap — panic safety
+            // inherited for FREE. The closure returns the finalized Vec on Ok.
+            let result: Result<Vec<WarningEntry>, Box<dyn std::any::Any + Send>> =
+                crate::utils::log::catch_unwind_future(async move {
+                    scope_run_with(run_id, async move {
+                        let mut lines = stdout_reader.lines();
+                        let mut log_buf: Vec<String> = Vec::with_capacity(500);
+                        let mut last_log_flush = std::time::Instant::now();
+                        while let Ok(Some(line)) = lines.next_line().await {
+                            // Phase 13 WARN-15: ingest EVERY line BEFORE the
+                            // existing parse/log-batch logic. The collector is
+                            // non-interfering — it reads the line and returns
+                            // (capture rule is union of severity + tail-pattern).
+                            stdout_collector.ingest(&line, DrainOrigin::Stdout);
+                            let current = if parse_sync_file_count(&line) > 0 {
                             fc.fetch_add(1, Ordering::Relaxed) + 1
                         } else {
                             fc.load(Ordering::Relaxed)
@@ -848,13 +872,24 @@ impl P4Executor {
                             ch.count()
                         );
                     }
+                    // Phase 13 WARN-15: return the finalized warnings Vec from
+                    // the drain closure. On a panic above, catch_unwind_future's
+                    // Err arm below yields an empty Vec fallback.
+                    stdout_collector.finalize()
                 })
-                .await;
+                .await
             })
-            .await
-            {
-                let msg = crate::utils::log::panic_payload_as_str(&payload);
-                warn!("[drain] panic caught stream=stdout msg={}", msg);
+            .await;
+            // WARN-17: on panic the payload is logged; warnings from this drain
+            // are dropped (empty Vec fallback) so child.wait() in the select!
+            // below never hangs on a dead pipe. The sync still completes.
+            match result {
+                Ok(warnings) => warnings,
+                Err(payload) => {
+                    let msg = crate::utils::log::panic_payload_as_str(&payload);
+                    warn!("[drain] panic caught stream=stdout msg={}", msg);
+                    Vec::new()
+                }
             }
         });
 
@@ -862,16 +897,24 @@ impl P4Executor {
         // Phase 12 / D-02: capture RUN_ID before spawn (task_local does not
         // cross tokio::spawn).
         let run_id = RUN_ID.try_with(|r| r.clone()).ok();
+        // Phase 13 WARN-16: stderr forces Error severity — one collector,
+        // single-owner capture (no Arc/Mutex — Pitfall 4).
+        let mut stderr_collector = WarningCollector::new();
         let stderr_task = tokio::spawn(async move {
             // Phase 12 / D-09: catch_unwind_future wrap (async-aware twin of
             // std::catch_unwind — see stdout_task above for rationale).
-            if let Err(payload) = crate::utils::log::catch_unwind_future(async move {
-                scope_run_with(run_id, async move {
-                    let mut lines = stderr_reader.lines();
-                    let mut log_buf: Vec<String> = Vec::with_capacity(64);
-                    let mut last_log_flush = std::time::Instant::now();
-                    while let Ok(Some(line)) = lines.next_line().await {
-                        log_buf.push(line);
+            // WARN-17: ingest() lives INSIDE this wrap — panic safety inherited.
+            let result: Result<Vec<WarningEntry>, Box<dyn std::any::Any + Send>> =
+                crate::utils::log::catch_unwind_future(async move {
+                    scope_run_with(run_id, async move {
+                        let mut lines = stderr_reader.lines();
+                        let mut log_buf: Vec<String> = Vec::with_capacity(64);
+                        let mut last_log_flush = std::time::Instant::now();
+                        while let Ok(Some(line)) = lines.next_line().await {
+                            // Phase 13 WARN-16: ingest EVERY line. DrainOrigin::Stderr
+                            // forces Error severity (regardless of the -s tag).
+                            stderr_collector.ingest(&line, DrainOrigin::Stderr);
+                            log_buf.push(line);
                         let should_flush_log = log_buf.len() >= 500
                             || last_log_flush.elapsed() >= std::time::Duration::from_millis(200);
                         if should_flush_log {
@@ -919,13 +962,20 @@ impl P4Executor {
                             ch_err.count()
                         );
                     }
+                    // Phase 13 WARN-16: return the finalized warnings Vec from
+                    // the stderr drain closure.
+                    stderr_collector.finalize()
                 })
-                .await;
+                .await
             })
-            .await
-            {
-                let msg = crate::utils::log::panic_payload_as_str(&payload);
-                warn!("[drain] panic caught stream=stderr msg={}", msg);
+            .await;
+            match result {
+                Ok(warnings) => warnings,
+                Err(payload) => {
+                    let msg = crate::utils::log::panic_payload_as_str(&payload);
+                    warn!("[drain] panic caught stream=stderr msg={}", msg);
+                    Vec::new()
+                }
             }
         });
 
@@ -1016,10 +1066,16 @@ impl P4Executor {
             .await;
         });
 
-        tokio::select! {
+        let merged = tokio::select! {
             status = child.wait() => {
-                let _ = stdout_task.await;
-                let _ = stderr_task.await;
+                // Capture the finalized warning Vecs from each drain. The
+                // JoinHandle is `Result<Vec<WarningEntry>, JoinError>` — the
+                // drain's internal panic was already caught + logged inside
+                // the closure (the Err arm there returns Vec::new() so the
+                // JoinHandle itself only errs on a tokio-level cancel, which
+                // we map to an empty Vec defensively).
+                let stdout_warnings = stdout_task.await.unwrap_or_default();
+                let stderr_warnings = stderr_task.await.unwrap_or_default();
                 heartbeat_task.abort();
                 let status = status.map_err(AppError::ProcessSpawn)?;
                 // INSTR-09 / D-09: process.exited fires BEFORE the success check
@@ -1031,11 +1087,18 @@ impl P4Executor {
                     render_exited_line(pid_for_log, status.code(), elapsed_for_log)
                 );
                 if !status.success() {
+                    // D-06: exit-0 only — drop warnings on non-zero exit. The
+                    // raw lines remain on disk in sync-<run_id>.log (T-13-07).
                     return Err(AppError::P4Command(status.code()));
                 }
+                // AGG-19: merge the two drains' finalized Vecs. The pure fn
+                // re-buckets + re-caps at 500 internally (Open Question 2 = yes).
+                merge_warning_lists([stdout_warnings, stderr_warnings])
             }
             _ = cancel.cancelled() => {
                 let _ = child.kill().await;
+                // D-06: drop warnings on cancel — await only to release the
+                // JoinHandles (the Vecs themselves are discarded).
                 let _ = stdout_task.await;
                 let _ = stderr_task.await;
                 heartbeat_task.abort();
@@ -1049,16 +1112,21 @@ impl P4Executor {
                 );
                 return Err(AppError::Cancelled);
             }
-        }
+        };
 
         let total = file_count.load(Ordering::Relaxed);
-        Ok(total)
+        // AGG-18: the tuple `(files_synced, merged_warnings)` flows back to
+        // the orchestrator's p4_sync() helper.
+        Ok((total, merged))
     }
 
     /// Force sync the Engine subtree (Source, Shaders, Config) using `p4 sync -f`.
     /// This runs after normal sync to restore git-modified Engine files that normal
     /// sync skips when the same CL is already synced. Non-fatal in the pipeline.
     /// Streams LogLine events only (no progress/heartbeat per D-06).
+    ///
+    /// Phase 13 WARN-15/16/17 + AGG-18: same drain-threading shape as `sync()`.
+    /// Returns `((), merged_warnings)` on exit-0; drops warnings on Err (D-06).
     pub async fn force_sync_engine(
         &self,
         workspace: &WorkspaceConfig,
@@ -1066,7 +1134,7 @@ impl P4Executor {
         cancel: CancellationToken,
         process_manager: Option<Arc<ProcessManager>>,
         sync_log_dir: Option<std::path::PathBuf>,
-    ) -> Result<(), AppError> {
+    ) -> Result<((), Vec<WarningEntry>), AppError> {
         let args = build_force_sync_args();
         let args_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
 
@@ -1117,28 +1185,36 @@ impl P4Executor {
                 crate::utils::sync_run_log::SyncRunFileWriter::open(dir, id)
             })
             .unwrap_or_else(crate::utils::sync_run_log::SyncRunFileWriter::disabled);
+        // Phase 13 WARN-15: one WarningCollector per drain — single-owner
+        // capture (no Arc/Mutex — Pitfall 4). Mirrors sync() drain shape.
+        let mut stdout_collector = WarningCollector::new();
         let stdout_task = tokio::spawn(async move {
             // Phase 12 / D-09: catch_unwind_future wrap (async-aware twin of
             // std::catch_unwind — see p4 sync stdout_task for rationale).
-            if let Err(payload) = crate::utils::log::catch_unwind_future(async move {
-                scope_run_with(run_id, async move {
-                    let mut lines = BufReader::new(stdout).lines();
-                    let mut log_buf: Vec<String> = Vec::with_capacity(500);
-                    let mut last_log_flush = std::time::Instant::now();
-                    // quick-260630-srw: local matched-file counter so force-sync
-                    // lines carry a 1-based {current} in the per-run file.
-                    // total is unknown for force-sync (no dry-run); printed
-                    // verbatim as 0 (never a divisor).
-                    let mut fc_force: u64 = 0;
-                    while let Ok(Some(line)) = lines.next_line().await {
-                        // quick-260630-srw: write matched-file lines to the
-                        // per-run file (same sync-<run_id>.log as primary
-                        // sync). Best-effort; write_line swallows errors.
-                        if parse_sync_file_count(&line) > 0 {
-                            fc_force += 1;
-                            sync_writer.write_line(fc_force, 0, &line);
-                        }
-                        log_buf.push(line);
+            // WARN-17: ingest() lives INSIDE this wrap — panic safety inherited.
+            let result: Result<Vec<WarningEntry>, Box<dyn std::any::Any + Send>> =
+                crate::utils::log::catch_unwind_future(async move {
+                    scope_run_with(run_id, async move {
+                        let mut lines = BufReader::new(stdout).lines();
+                        let mut log_buf: Vec<String> = Vec::with_capacity(500);
+                        let mut last_log_flush = std::time::Instant::now();
+                        // quick-260630-srw: local matched-file counter so force-sync
+                        // lines carry a 1-based {current} in the per-run file.
+                        // total is unknown for force-sync (no dry-run); printed
+                        // verbatim as 0 (never a divisor).
+                        let mut fc_force: u64 = 0;
+                        while let Ok(Some(line)) = lines.next_line().await {
+                            // Phase 13 WARN-15: ingest EVERY line BEFORE the
+                            // existing parse/log-batch logic. Non-interfering.
+                            stdout_collector.ingest(&line, DrainOrigin::Stdout);
+                            // quick-260630-srw: write matched-file lines to the
+                            // per-run file (same sync-<run_id>.log as primary
+                            // sync). Best-effort; write_line swallows errors.
+                            if parse_sync_file_count(&line) > 0 {
+                                fc_force += 1;
+                                sync_writer.write_line(fc_force, 0, &line);
+                            }
+                            log_buf.push(line);
                         let should_flush_log = log_buf.len() >= 500
                             || last_log_flush.elapsed() >= std::time::Duration::from_millis(200);
                         if should_flush_log {
@@ -1191,13 +1267,19 @@ impl P4Executor {
                             ch_out.count()
                         );
                     }
+                    // Phase 13 WARN-15: return the finalized Vec from the closure.
+                    stdout_collector.finalize()
                 })
-                .await;
+                .await
             })
-            .await
-            {
-                let msg = crate::utils::log::panic_payload_as_str(&payload);
-                warn!("[drain] panic caught stream=stdout msg={}", msg);
+            .await;
+            match result {
+                Ok(warnings) => warnings,
+                Err(payload) => {
+                    let msg = crate::utils::log::panic_payload_as_str(&payload);
+                    warn!("[drain] panic caught stream=stdout msg={}", msg);
+                    Vec::new()
+                }
             }
         });
 
@@ -1205,25 +1287,31 @@ impl P4Executor {
         let ch_err = channel.clone();
         // Phase 12 / D-02: capture RUN_ID before spawn.
         let run_id = RUN_ID.try_with(|r| r.clone()).ok();
+        // Phase 13 WARN-16: stderr forces Error severity — single-owner capture.
+        let mut stderr_collector = WarningCollector::new();
         let stderr_task = tokio::spawn(async move {
             // Phase 12 / D-09: catch_unwind_future wrap (async-aware twin of
             // std::catch_unwind — see p4 sync stdout_task for rationale).
-            if let Err(payload) = crate::utils::log::catch_unwind_future(async move {
-                scope_run_with(run_id, async move {
-                    let mut lines = BufReader::new(stderr).lines();
-                    let mut log_buf: Vec<String> = Vec::with_capacity(64);
-                    let mut last_log_flush = std::time::Instant::now();
-                    while let Ok(Some(line)) = lines.next_line().await {
-                        log_buf.push(line);
-                        let should_flush_log = log_buf.len() >= 500
-                            || last_log_flush.elapsed() >= std::time::Duration::from_millis(200);
-                        if should_flush_log {
-                            let batch_len = log_buf.len();
-                            let flush_start = last_log_flush;
-                            let batch = std::mem::take(&mut log_buf);
-                            let _ = ch_err.send(SyncEvent::LogBatch {
-                                lines: batch,
-                                stream: "stderr".to_string(),
+            // WARN-17: ingest() lives INSIDE this wrap — panic safety inherited.
+            let result: Result<Vec<WarningEntry>, Box<dyn std::any::Any + Send>> =
+                crate::utils::log::catch_unwind_future(async move {
+                    scope_run_with(run_id, async move {
+                        let mut lines = BufReader::new(stderr).lines();
+                        let mut log_buf: Vec<String> = Vec::with_capacity(64);
+                        let mut last_log_flush = std::time::Instant::now();
+                        while let Ok(Some(line)) = lines.next_line().await {
+                            // Phase 13 WARN-16: ingest EVERY line. Stderr -> Error.
+                            stderr_collector.ingest(&line, DrainOrigin::Stderr);
+                            log_buf.push(line);
+                            let should_flush_log = log_buf.len() >= 500
+                                || last_log_flush.elapsed() >= std::time::Duration::from_millis(200);
+                            if should_flush_log {
+                                let batch_len = log_buf.len();
+                                let flush_start = last_log_flush;
+                                let batch = std::mem::take(&mut log_buf);
+                                let _ = ch_err.send(SyncEvent::LogBatch {
+                                    lines: batch,
+                                    stream: "stderr".to_string(),
                             });
                             last_log_flush = std::time::Instant::now();
                             if log::log_enabled!(log::Level::Debug) {
@@ -1258,13 +1346,19 @@ impl P4Executor {
                             ch_err.count()
                         );
                     }
+                    // Phase 13 WARN-16: return the finalized Vec from the closure.
+                    stderr_collector.finalize()
                 })
-                .await;
+                .await
             })
-            .await
-            {
-                let msg = crate::utils::log::panic_payload_as_str(&payload);
-                warn!("[drain] panic caught stream=stderr msg={}", msg);
+            .await;
+            match result {
+                Ok(warnings) => warnings,
+                Err(payload) => {
+                    let msg = crate::utils::log::panic_payload_as_str(&payload);
+                    warn!("[drain] panic caught stream=stderr msg={}", msg);
+                    Vec::new()
+                }
             }
         });
 
@@ -1272,8 +1366,9 @@ impl P4Executor {
         // Note: caller (SyncOrchestrator) owns clear_tracked() — matches sync() pattern
         tokio::select! {
             status = child.wait() => {
-                let _ = stdout_task.await;
-                let _ = stderr_task.await;
+                // Phase 13: capture the finalized Vecs (see sync() for shape).
+                let stdout_warnings = stdout_task.await.unwrap_or_default();
+                let stderr_warnings = stderr_task.await.unwrap_or_default();
                 let status = status.map_err(AppError::ProcessSpawn)?;
                 // INSTR-09 / D-09: process.exited — always fires (before success
                 // check) so the force-sync terminal lifecycle line emits on
@@ -1285,12 +1380,16 @@ impl P4Executor {
                     render_exited_line(pid_for_log, status.code(), elapsed_for_log)
                 );
                 if !status.success() {
+                    // D-06: drop warnings on non-zero exit.
                     return Err(AppError::P4Command(status.code()));
                 }
-                Ok(())
+                // AGG-19: merge the two drains' finalized Vecs (recap-at-500 internal).
+                let merged = merge_warning_lists([stdout_warnings, stderr_warnings]);
+                Ok(((), merged))
             }
             _ = cancel.cancelled() => {
                 let _ = child.kill().await;
+                // D-06: drop warnings on cancel — await only to release JoinHandles.
                 let _ = stdout_task.await;
                 let _ = stderr_task.await;
                 // INSTR-09 / D-09: process.cancelled on the cancel arm.
