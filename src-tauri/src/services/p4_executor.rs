@@ -1665,14 +1665,17 @@ impl P4Executor {
         Ok(parse_changelists(&stdout))
     }
 
-    /// quick-260713-s44: Read-only workspace-health audit. Spawns the 2-command
-    /// p4 sequence (`p4 reconcile -n -l -I <whitelist>` + `p4 where <whitelist>`)
-    /// over the FIXED Config/Source/.uproject whitelist and returns a categorized
-    /// report of ALL files with abnormal p4 status.
+    /// quick-260713-s44: Read-only workspace-health audit. Spawns the 3-command
+    /// p4 sequence (`p4 reconcile -n -l -I <whitelist>` + `p4 where <whitelist>`
+    /// + `p4 resolve -n <whitelist>`) over the FIXED Config/Source/.uproject
+    /// whitelist and returns a categorized report of ALL files with abnormal
+    /// p4 status.
     ///
     /// reconcile surfaces not-in-depot + missing-on-disk + differs in one pass;
     /// `p4 where` surfaces unmapped (the stream-switch orphan case) — reconcile
-    /// only processes View-mapped paths, so unmapped needs the 2nd command.
+    /// only processes View-mapped paths, so unmapped needs the 2nd command;
+    /// `p4 resolve -n` surfaces needs-resolve (conflict-pending after a sync) —
+    /// the most actionable blocker state, more severe than differs.
     ///
     /// Best-effort + non-fatal: a p4 error on one path does NOT blank the report
     /// (T-s44-03). 120s timeout per command + CancellationToken via tokio::select!
@@ -1753,8 +1756,11 @@ impl P4Executor {
                             WorkspaceHealthCategory::Differs => {
                                 differs.push(path);
                             }
-                            // Unmapped is NOT a reconcile category; skip defensively.
-                            WorkspaceHealthCategory::Unmapped => {}
+                            // Unmapped + NeedsResolve are NOT reconcile
+                            // categories; skip defensively (they come from
+                            // the `where` / `resolve` spawns respectively).
+                            WorkspaceHealthCategory::Unmapped
+                            | WorkspaceHealthCategory::NeedsResolve => {}
                         }
                     }
                 }
@@ -1909,6 +1915,113 @@ impl P4Executor {
         let unmapped = where_read_task.await.unwrap_or_default();
         where_outcome?;
 
+        // --- (3) p4 resolve -n <whitelist> ---
+        // Surfaces files left in a needs-resolve (conflict-pending) state after
+        // a sync. `p4 resolve -n` emits `<depot-path>#<rev> - <note>` per file
+        // (note prose: `merging ...`, `must resolve ...`, `ignored`, etc.).
+        //
+        // FLAG JUSTIFICATION (T-sft-01 pitfall): `-n` is MANDATORY — it is the
+        // preview/dry-run flag; without it, `p4 resolve` would MUTATE workspace
+        // files (resolving conflicts by auto-merging or accepting the branch
+        // result), violating the read-only audit contract (D-14 StepScope +
+        // useWorkspaceHealth on-demand design). DO NOT add `-l` — `p4 help
+        // resolve` shows resolve's valid flags are `-A -a -d -f -n -N -o -t -v`;
+        // there is NO `-l` on resolve (unlike reconcile). DO NOT add `-I` —
+        // `-I` is a `reconcile` flag (ignore P4IGNORE checking) and is NOT
+        // valid on `resolve` (resolve itself is the state processor; -I
+        // semantics differ on resolve). The whitelist (already built above from
+        // build_audit_whitelist_args) is passed as bare trailing depot-syntax
+        // paths exactly like reconcile/where.
+        let resolve_args: Vec<&str> = {
+            let mut v = vec!["resolve", "-n"];
+            v.extend(whitelist_refs.iter().copied());
+            v
+        };
+        let mut resolve_cmd = self.build_p4_command(workspace, &resolve_args);
+        let mut resolve_child = spawn_with_retry(
+            resolve_cmd
+                .stdout(Stdio::piped())
+                .stderr(Stdio::null()),
+        )
+        .await
+        .map_err(AppError::ProcessSpawn)?;
+
+        let resolve_pid = resolve_child.id().unwrap_or(0);
+        let resolve_start = std::time::Instant::now();
+        info!(
+            "{}",
+            render_spawned_line(
+                resolve_pid,
+                &workspace.root_path,
+                &resolve_args.join(" ")
+            )
+        );
+
+        let resolve_stdout = resolve_child.stdout.take();
+        let resolve_read_task = if let Some(stdout) = resolve_stdout {
+            let reader = BufReader::new(stdout);
+            tokio::spawn(async move {
+                let mut lines = reader.lines();
+                let mut needs_resolve: Vec<String> = Vec::new();
+                while let Ok(Some(line)) = lines.next_line().await {
+                    if let Some((category, path)) = parse_resolve_line(&line) {
+                        // parse_resolve_line only ever returns NeedsResolve;
+                        // the match is exhaustive over the enum for future-proofing.
+                        if matches!(category, WorkspaceHealthCategory::NeedsResolve) {
+                            needs_resolve.push(path);
+                        }
+                    }
+                }
+                needs_resolve
+            })
+        } else {
+            tokio::spawn(async { Vec::<String>::new() })
+        };
+
+        let resolve_outcome: Result<(), AppError> = tokio::select! {
+            result = tokio::time::timeout(
+                std::time::Duration::from_secs(120),
+                resolve_child.wait(),
+            ) => {
+                match result {
+                    Ok(status) => {
+                        let status = status.map_err(AppError::ProcessSpawn)?;
+                        info!(
+                            "{}",
+                            render_exited_line(
+                                resolve_pid,
+                                status.code(),
+                                resolve_start.elapsed().as_millis()
+                            )
+                        );
+                        if !status.success() {
+                            warn!("[audit] resolve non-success status; returning partial report");
+                        }
+                        Ok(())
+                    }
+                    Err(_) => {
+                        warn!("[audit] resolve timed out after 120s, returning partial report");
+                        info!(
+                            "{}",
+                            render_exited_line(
+                                resolve_pid,
+                                None,
+                                resolve_start.elapsed().as_millis()
+                            )
+                        );
+                        Ok(())
+                    }
+                }
+            }
+            _ = cancel.cancelled() => {
+                warn!("[audit] cancelled by user during resolve");
+                _audit_scope.cancelled();
+                return Err(AppError::Cancelled);
+            }
+        };
+        let needs_resolve = resolve_read_task.await.unwrap_or_default();
+        resolve_outcome?;
+
         // Diagnostic: the bound p4 stream (context for WHY files are unmapped).
         // Non-fatal — get_client_stream returns Ok(None) on p4 failure.
         let stream = self
@@ -1926,6 +2039,7 @@ impl P4Executor {
                     WorkspaceHealthCategory::MissingOnDisk => missing_on_disk.clone(),
                     WorkspaceHealthCategory::NotInDepot => not_in_depot.clone(),
                     WorkspaceHealthCategory::Differs => differs.clone(),
+                    WorkspaceHealthCategory::NeedsResolve => needs_resolve.clone(),
                 };
                 let count = paths.len();
                 WorkspaceHealthCategoryGroup {
@@ -1937,11 +2051,12 @@ impl P4Executor {
             .collect();
 
         _audit_scope.done(&format!(
-            "unmapped={} missing={} notindepot={} differs={}",
+            "unmapped={} missing={} notindepot={} differs={} resolve={}",
             categories[0].count,
             categories[1].count,
             categories[2].count,
             categories[3].count,
+            categories[4].count,
         ));
 
         Ok(WorkspaceHealthReport { categories, stream })
@@ -2174,23 +2289,27 @@ pub fn parse_changelists(output: &str) -> Vec<ChangelistEntry> {
 }
 
 // ========================================================================
-// quick-260713-s44: workspace-health audit (read-only p4 reconcile + where)
+// quick-260713-s44: workspace-health audit (read-only p4 reconcile + where + resolve)
 // ========================================================================
 //
 // Surfaces ALL files with abnormal p4 status in the FYGame structural
-// whitelist (Config/ + Source/ + <project>.uproject), grouped into 4
+// whitelist (Config/ + Source/ + <project>.uproject), grouped into 5
 // categories. Motivated by FY.Uproject showing "not in current workspace
 // mapping" after a stream switch stranded files from the prior stream.
 //
-// TWO p4 commands cover all 4 categories (CONTEXT D-mechanism):
+// THREE p4 commands cover all 5 categories (CONTEXT D-mechanism):
 //   (1) `p4 reconcile -n -l -I <whitelist>` -> not-in-depot + missing-on-disk + differs
 //   (2) `p4 where <whitelist>`              -> unmapped
+//   (3) `p4 resolve -n <whitelist>`         -> needs-resolve (conflict-pending)
 // reconcile's `-I` means "ignore P4IGNORE checking" — NOT the sync command's
 // `-I` global-progress flag. Do NOT conflate. reconcile does NOT surface
 // unmapped files (it only processes View-mapped paths); that's WHY `p4 where`
-// is the 2nd command.
+// is the 2nd command. `p4 resolve -n` is the 3rd command because reconcile/
+// where do NOT surface conflict-pending files (resolve is the state processor
+// for that). `resolve` accepts ONLY `-n` (no `-l`, no `-I` — see parse_resolve_line
+// doc + the spawn-site comment for the `p4 help resolve` flag reference).
 
-/// The 4 abnormal-status categories surfaced by the workspace-health audit.
+/// The 5 abnormal-status categories surfaced by the workspace-health audit.
 /// Serialized as snake_case strings across the Tauri IPC boundary.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
 pub enum WorkspaceHealthCategory {
@@ -2206,17 +2325,24 @@ pub enum WorkspaceHealthCategory {
     /// Locally modified vs the depot revision. reconcile "edited"/"editing".
     #[serde(rename = "differs")]
     Differs,
+    /// Left in a needs-resolve (conflict-pending) state after a sync. Detected
+    /// via `p4 resolve -n`. Blocker state — more severe than Differs (the file
+    /// is NOT cleanly synced until resolved).
+    #[serde(rename = "needs-resolve")]
+    NeedsResolve,
 }
 
 impl WorkspaceHealthCategory {
     /// Stable display order: unmapped (the motivating case) first, then the 3
-    /// reconcile categories. The report always emits all 4 entries in this order
-    /// (empty Vec if none found — not omitted).
-    pub const ALL: [WorkspaceHealthCategory; 4] = [
+    /// reconcile categories, then needs-resolve (the resolve-detected blocker)
+    /// LAST. The report always emits all 5 entries in this order (empty Vec if
+    /// none found — not omitted).
+    pub const ALL: [WorkspaceHealthCategory; 5] = [
         WorkspaceHealthCategory::Unmapped,
         WorkspaceHealthCategory::MissingOnDisk,
         WorkspaceHealthCategory::NotInDepot,
         WorkspaceHealthCategory::Differs,
+        WorkspaceHealthCategory::NeedsResolve,
     ];
 }
 
@@ -2625,6 +2751,58 @@ pub fn parse_where_line(line: &str) -> Option<(bool, String)> {
     None
 }
 
+/// Parse one `p4 resolve -n` stdout line into (NeedsResolve, project-relative path).
+///
+/// `p4 resolve -n` emits `<depot-path>#<rev> - <note>` per file left in a
+/// needs-resolve (conflict-pending) state, where `<note>` is prose like
+/// `merging //...#1,#2`, `must resolve //...#3,#4`, `ignored`, `can't resolve`,
+/// or `merge from ...`. The depot-path token is the slice BEFORE the first
+/// ` - ` separator. Returns `None` for:
+///   - `exit:`/`error:`-tagged lines (severity-aware routing, mirrors reconcile)
+///   - empty lines
+///   - lines with no ` - ` separator (stray info/summary)
+///   - the pathless leading-dash form `- must resolve ...` (the pre-` - ` token
+///     trims to empty)
+///
+/// The path token is reduced to a whitelist-relative display path via the
+/// shared `extract_whitelist_relative_path` helper (Config/..., Source/...,
+/// or `<proj>/<proj>.uproject`). Resolve candidates are by definition
+/// depot-tracked files the user needs to act on — they are NOT filtered
+/// through `is_ignored_generated` (that filter is a reconcile/not-in-depot
+/// concern only).
+///
+/// T-sft-02: pure parser, returns Option, no unwrap on parsed paths — a
+/// malformed/giant p4 line cannot panic the drain (bounded by BufReader lines()).
+pub fn parse_resolve_line(line: &str) -> Option<(WorkspaceHealthCategory, String)> {
+    // quick-260718-eje: route on the `-s` severity tag. Under `-s`, p4 tags the
+    // per-file ` - merging` / ` - must resolve` lines as `info:` and the empty
+    // case `No file(s) to resolve.` as `warning:`. A blanket Error-skip is safe
+    // — error-tagged lines are NOT per-file resolve lines (mirrors reconcile).
+    let (severity, rest) = split_p4_severity(line);
+    if matches!(severity, P4Severity::Exit | P4Severity::Error) {
+        return None;
+    }
+    let line = rest.trim();
+    if line.is_empty() {
+        return None;
+    }
+
+    // The path token is the slice BEFORE the first ` - ` separator. If there is
+    // no ` - ` at all -> None (stray info/summary line).
+    let marker_idx = line.find(" - ")?;
+    let depot_part = line[..marker_idx].trim();
+    if depot_part.is_empty() {
+        // Pathless leading-dash form (e.g. `- must resolve //...#3,#4` after
+        // tag strip) — no path token before the separator, so nothing to
+        // categorize.
+        return None;
+    }
+    Some((
+        WorkspaceHealthCategory::NeedsResolve,
+        extract_whitelist_relative_path(depot_part),
+    ))
+}
+
 /// Hardcoded predicate for UE-generated subtrees + IDE files. Applied ONLY to
 /// not-in-depot results (the noisy category) so the list isn't dominated by
 /// generated artifacts the user can't act on (CONTEXT .p4ignore-strategy
@@ -2905,6 +3083,102 @@ Server network estimates: files added/updated/deleted=0/0/0, bytes added/updated
         assert_eq!(parse_where_line("... file(s) not in client view."), None);
     }
 
+    // --- quick-260721-sft: parse_resolve_line pure-parser tests (RED -> GREEN) ---
+    //
+    // `p4 resolve -n` emits `<depot-path>#<rev> - <note>` per conflict-pending
+    // file (note prose: `merging ...`, `must resolve ...`, `ignored`, etc.).
+    // These pin the parser's contract: the depot-path token is BEFORE the first
+    // ` - ` separator, reduced to a whitelist-relative display path; severity-
+    // aware routing skips exit/error; the pathless leading-dash form is None.
+
+    #[test]
+    fn test_parse_resolve_line_merging() {
+        // `merging` note — the common case where p4 auto-merged but left the
+        // file resolve-pending.
+        let r = parse_resolve_line(
+            "info: //FYDepot/FYGame/Config/DefaultEngine.ini#1 - merging //FYDepot/FYGame/Config/DefaultEngine.ini#1,#2",
+        );
+        assert_eq!(
+            r,
+            Some((
+                WorkspaceHealthCategory::NeedsResolve,
+                "Config/DefaultEngine.ini".to_string()
+            ))
+        );
+    }
+
+    #[test]
+    fn test_parse_resolve_line_must_resolve() {
+        // `must resolve` note — the harder conflict requiring manual action.
+        let r = parse_resolve_line(
+            "//FYDepot/FYGame/Source/Foo.cpp#3 - must resolve //FYDepot/FYGame/Source/Foo.cpp#3,#4",
+        );
+        assert_eq!(
+            r,
+            Some((
+                WorkspaceHealthCategory::NeedsResolve,
+                "Source/Foo.cpp".to_string()
+            ))
+        );
+    }
+
+    #[test]
+    fn test_parse_resolve_line_pathless_leading_dash_is_none() {
+        // Pathless leading-dash form (no path token before ` - `) — defensive
+        // None. After tag strip this reads `- must resolve //...#3,#4`; the
+        // pre-` - ` token trims to empty.
+        let r = parse_resolve_line("info: - must resolve //FYDepot/FYGame/Source/Foo.cpp#3,#4");
+        assert_eq!(r, None);
+    }
+
+    #[test]
+    fn test_parse_resolve_line_no_file_to_resolve_warning_is_none() {
+        // The empty/no-op summary line p4 emits when nothing needs resolve.
+        // Tagged `warning:` under `-s` (NOT error), but no ` - ` separator
+        // before the prose -> None via the "no separator" path.
+        assert_eq!(
+            parse_resolve_line("warning: No file(s) to resolve."),
+            None
+        );
+    }
+
+    #[test]
+    fn test_parse_resolve_line_exit_is_none() {
+        // The terminal `exit:` line is NEVER categorized (consistent with
+        // reconcile/where `-s` routing).
+        assert_eq!(parse_resolve_line("exit: 0"), None);
+    }
+
+    #[test]
+    fn test_parse_resolve_line_empty_is_none() {
+        assert_eq!(parse_resolve_line(""), None);
+    }
+
+    #[test]
+    fn test_parse_resolve_line_no_separator_is_none() {
+        // A line with NO ` - ` separator (e.g. a stray info line) is None.
+        assert_eq!(
+            parse_resolve_line("info: some prose with no separator"),
+            None
+        );
+    }
+
+    #[test]
+    fn test_parse_resolve_line_uproject_relative() {
+        // .uproject resolve line -> project-relative form via the shared
+        // extract_whitelist_relative_path helper.
+        let r = parse_resolve_line(
+            "//FYDepot/FYGame/FYGame.uproject#2 - merging //FYDepot/FYGame/FYGame.uproject#2,#3",
+        );
+        assert_eq!(
+            r,
+            Some((
+                WorkspaceHealthCategory::NeedsResolve,
+                "FYGame/FYGame.uproject".to_string()
+            ))
+        );
+    }
+
     #[test]
     fn test_is_ignored_generated_intermediate() {
         assert!(is_ignored_generated("Intermediate/Project/xxxx.bin"));
@@ -3166,6 +3440,35 @@ exit: 0
     #[test]
     fn test_parse_where_line_exit_is_none() {
         assert_eq!(parse_where_line("exit: 0"), None);
+    }
+
+    #[test]
+    fn test_parse_resolve_line_info_prefixed() {
+        // quick-260721-sft: under `-s`, p4 tags the per-file resolve lines as
+        // `info:` (NOT error). The tag must be stripped and the line still
+        // parse to NeedsResolve — mirrors test_parse_reconcile_line_info_prefixed.
+        let r = parse_resolve_line(
+            "info: //FYDepot/FYGame/Config/DefaultEngine.ini#1 - merging //FYDepot/FYGame/Config/DefaultEngine.ini#1,#2",
+        );
+        assert_eq!(
+            r,
+            Some((
+                WorkspaceHealthCategory::NeedsResolve,
+                "Config/DefaultEngine.ini".to_string()
+            ))
+        );
+    }
+
+    #[test]
+    fn test_parse_resolve_line_error_is_none() {
+        // quick-260721-sft: error-tagged lines are routed out, never
+        // mis-categorized (consistent with reconcile).
+        assert_eq!(
+            parse_resolve_line(
+                "error: //FYDepot/FYGame/Config/X.ini#1 - merging //FYDepot/FYGame/Config/X.ini#1,#2"
+            ),
+            None
+        );
     }
 
     #[test]
