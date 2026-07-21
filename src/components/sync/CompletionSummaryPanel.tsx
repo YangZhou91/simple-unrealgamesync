@@ -72,7 +72,7 @@ function SeverityGroup({
         </span>
       </button>
       {expanded && (
-        <div className="h-40 border-t border-border">
+        <div className="h-40 border-t border-border flex flex-col">
           {paths.length === 0 ? (
             <div className="flex h-full items-center justify-center text-sm text-muted">
               无 / none
