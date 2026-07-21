@@ -123,7 +123,7 @@ export function CompletionSummaryPanel({ warnings }: CompletionSummaryPanelProps
 
   return (
     <div
-      className="w-full max-w-md border border-border rounded-md"
+      className="w-[42rem] max-w-[90vw] border border-border rounded-md"
       data-summary-root="true"
     >
       <div className="flex items-center gap-2 px-4 py-2 border-b border-border">
