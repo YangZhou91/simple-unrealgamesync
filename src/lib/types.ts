@@ -17,12 +17,16 @@ export interface P4BehindInfo {
   behind: number;
 }
 
-// quick-260713-s44: workspace-health audit types (read-only p4 reconcile + where)
+// quick-260713-s44: workspace-health audit types (read-only p4 reconcile + where + resolve)
+// 5 categories: unmapped / missing-on-disk / not-in-depot / differs / needs-resolve.
+// The 5th (needs-resolve) is surfaced by `p4 resolve -n` — files left in a
+// conflict-pending state after a sync (blocker, more severe than differs).
 export type WorkspaceHealthCategory =
   | "unmapped"
   | "missing-on-disk"
   | "not-in-depot"
-  | "differs";
+  | "differs"
+  | "needs-resolve";
 
 export interface WorkspaceHealthCategoryGroup {
   category: WorkspaceHealthCategory;

@@ -58,6 +58,7 @@ const sampleReport: WorkspaceHealthReport = {
     { category: "missing-on-disk", count: 0, paths: [] },
     { category: "not-in-depot", count: 2, paths: ["Config/X.ini", "Source/Y.cpp"] },
     { category: "differs", count: 0, paths: [] },
+    { category: "needs-resolve", count: 0, paths: [] },
   ],
   stream: "//FYDepot/FYGame main",
 };

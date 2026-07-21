@@ -8,7 +8,8 @@ import type { WorkspaceHealthCategory } from "@/lib/types";
 /**
  * quick-260713-s44: Read-only workspace-health audit panel. Surfaces ALL files
  * with abnormal p4 status in the FYGame Config/Source/.uproject whitelist,
- * grouped into 4 categories (unmapped / missing-on-disk / not-in-depot / differs).
+ * grouped into 5 categories (unmapped / missing-on-disk / not-in-depot /
+ * differs / needs-resolve).
  *
  * On-demand: the user clicks "检查 / Audit" — NEVER automatic (decoupled from
  * the sync flow). Read-only v1 — NO sync/add/fix actions (per CONTEXT D-ux).
@@ -16,18 +17,23 @@ import type { WorkspaceHealthCategory } from "@/lib/types";
  *
  * The motivating case: FYGame.uproject stranded after a p4 stream switch shows
  * in the "unmapped / 未映射" category (detected via `p4 where`, NOT reconcile).
+ * The 5th "needs-resolve" category surfaces files left in a conflict-pending
+ * state after a sync (detected via `p4 resolve -n`) — the most actionable
+ * blocker state.
  */
 interface WorkspaceHealthPanelProps {
   workspaceId: string | null;
 }
 
 // Fixed category display order (matches WorkspaceHealthCategory::ALL on the
-// Rust side): unmapped (the motivating case) first, then the 3 reconcile cats.
+// Rust side): unmapped (the motivating case) first, then the 3 reconcile cats,
+// then needs-resolve (the resolve-detected blocker) LAST.
 const CATEGORY_LABELS: { category: WorkspaceHealthCategory; label: string }[] = [
   { category: "unmapped", label: "未映射 / Unmapped" },
   { category: "missing-on-disk", label: "磁盘缺失 / Missing on disk" },
   { category: "not-in-depot", label: "未入库 / Not in depot" },
   { category: "differs", label: "已修改 / Differs" },
+  { category: "needs-resolve", label: "需解决 / Needs resolve" },
 ];
 
 function CategorySection({
