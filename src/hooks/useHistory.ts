@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import { Channel } from "@tauri-apps/api/core";
-import type { HistoryRecord, SyncEvent, SyncStep, StepStatus } from "@/lib/types";
+import type { HistoryRecord, SyncEvent, SyncStep, StepStatus, WarningEntry } from "@/lib/types";
 import * as commands from "@/lib/commands";
 
 type StepStatuses = Record<SyncStep, StepStatus>;
@@ -14,7 +14,7 @@ const initialStatuses: StepStatuses = {
 
 export function useHistory(
   workspaceId: string | null,
-  onRollbackComplete?: (cl: string | null) => void,
+  onRollbackComplete?: (cl: string | null, warnings: WarningEntry[]) => void,
 ) {
   const [records, setRecords] = useState<HistoryRecord[]>([]);
   const [isLoading, setIsLoading] = useState(false);
@@ -60,7 +60,13 @@ export function useHistory(
             break;
           case "syncCompleted":
             setIsRollingBack(false);
-            onRollbackComplete?.(event.data.changelist ?? null);
+            // Phase 14 (SUMM-23 — checker blocker #1 fix): rollback's
+            // SyncCompleted arrives on useHistory's OWN Channel (:48),
+            // distinct from useSync's. Without widening this callback to
+            // carry warnings, rollback warnings are silently dropped here
+            // and never reach the App-owned summary slot. The ?? [] guard
+            // handles the (impossible post-Task-1, but defensive) undefined.
+            onRollbackComplete?.(event.data.changelist ?? null, event.data.warnings ?? []);
             loadHistory();
             break;
           case "syncFailed":

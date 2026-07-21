@@ -5,6 +5,7 @@ import type {
   SyncState,
   SyncStep,
   StepStatus,
+  WarningEntry,
 } from "@/lib/types";
 import * as commands from "@/lib/commands";
 import { mergeProgress } from "@/hooks/mergeProgress";
@@ -18,7 +19,10 @@ const initialStatuses: StepStatuses = {
   genProject: "pending",
 };
 
-export function useSync(onSyncComplete?: (cl: string | null) => void) {
+export function useSync(
+  onSyncComplete?: (cl: string | null) => void,
+  onWarningsChange?: (warnings: WarningEntry[]) => void,
+) {
   const [syncState, setSyncState] = useState<SyncState>("idle");
   const [isCancelling, setIsCancelling] = useState(false);
   const [currentStep, setCurrentStep] = useState<SyncStep | null>(null);
@@ -122,7 +126,13 @@ export function useSync(onSyncComplete?: (cl: string | null) => void) {
       bytesRate: null,
     });
     stopFlushTimer();
-  }, [stopFlushTimer]);
+    // D-02 (Phase 14): clear the App-owned lastSyncWarnings slot via the
+    // up-callback so stale summaries never leak into the next idle screen.
+    // Covers both the visibility-change reconcile (:134-166) and the periodic
+    // 5s reconcile (:171-188) — both call resetToIdle, so the clear is
+    // centralized here.
+    onWarningsChange?.([]);
+  }, [stopFlushTimer, onWarningsChange]);
 
   // On window visibility change or focus (resume from minimize/background/
   // throttled state), check if the backend is still running a sync.
@@ -245,6 +255,10 @@ export function useSync(onSyncComplete?: (cl: string | null) => void) {
             fileCount: event.data.filesSynced,
             time: new Date().toLocaleString(),
           });
+          // Phase 14 (SUMM-23): report warnings UP to App-owned state via
+          // the callback. useSync no longer owns the slot — App.tsx lifts it
+          // in Plan 14-02. The ?? [] guard defends against a malformed event.
+          onWarningsChange?.(event.data.warnings ?? []);
           onSyncComplete?.(event.data.changelist ?? null);
           break;
         case "syncFailed":
@@ -255,6 +269,10 @@ export function useSync(onSyncComplete?: (cl: string | null) => void) {
             step: event.data.step,
             error: event.data.error,
           });
+          // D-02 (Phase 14): failure path shows ErrorPanel, not a summary.
+          // Clear so a failed-then-dismissed sync does not leak a stale
+          // summary when the user returns to idle.
+          onWarningsChange?.([]);
           break;
         case "syncCancelled":
           setSyncState("idle");
@@ -272,11 +290,13 @@ export function useSync(onSyncComplete?: (cl: string | null) => void) {
             fileCount: 0,
             time: `Cancelled at ${event.data.step}`,
           });
+          // D-02 (Phase 14): a cancelled sync did NOT complete — no summary.
+          onWarningsChange?.([]);
           break;
       }
     };
     return channel;
-  }, [onSyncComplete]);
+  }, [onSyncComplete, onWarningsChange]);
 
   const startSync = useCallback(
     async (workspaceId: string, cl?: string) => {
@@ -286,6 +306,8 @@ export function useSync(onSyncComplete?: (cl: string | null) => void) {
       logBufferRef.current = [];
       setLogLines([]);
       setErrorInfo(null);
+      // D-02 (Phase 14): the next sync start clears the prior run's summary.
+      onWarningsChange?.([]);
       setProgress({
         current: 0,
         total: 0,
@@ -317,7 +339,7 @@ export function useSync(onSyncComplete?: (cl: string | null) => void) {
         stopFlushTimer();
       }
     },
-    [createEventHandler, startFlushTimer, stopFlushTimer, resetToIdle, onSyncComplete, syncEngine],
+    [createEventHandler, startFlushTimer, stopFlushTimer, resetToIdle, onSyncComplete, onWarningsChange, syncEngine],
   );
 
   const stopSync = useCallback(async () => {
@@ -331,6 +353,9 @@ export function useSync(onSyncComplete?: (cl: string | null) => void) {
       const channel = createEventHandler();
       setSyncState("running");
       setErrorInfo(null);
+      // D-02 (Phase 14): a retry is a new run; the prior failed run's summary
+      // must not persist.
+      onWarningsChange?.([]);
       setStepStatuses(initialStatuses);
       startFlushTimer();
       try {
@@ -350,7 +375,7 @@ export function useSync(onSyncComplete?: (cl: string | null) => void) {
         stopFlushTimer();
       }
     },
-    [createEventHandler, targetCl, syncEngine, startFlushTimer, stopFlushTimer, resetToIdle, onSyncComplete],
+    [createEventHandler, targetCl, syncEngine, startFlushTimer, stopFlushTimer, resetToIdle, onSyncComplete, onWarningsChange],
   );
 
   const dismissError = useCallback(() => {
