@@ -1,4 +1,4 @@
-import type { SyncState, StepStatus, SyncStep, HistoryRecord, GitState, GitBranchInfo, P4BehindInfo } from "@/lib/types";
+import type { SyncState, StepStatus, SyncStep, HistoryRecord, GitState, GitBranchInfo, P4BehindInfo, WarningEntry } from "@/lib/types";
 import { IdlePanel } from "./IdlePanel";
 import { RunningPanel } from "./RunningPanel";
 import { ErrorPanel } from "./ErrorPanel";
@@ -53,6 +53,11 @@ interface SyncDashboardProps {
   // threads both at runtime.
   syncEngine?: boolean;
   onSyncEngineChange?: (v: boolean) => void;
+  // Phase 14 (SUMM-21..23): aggregated warnings from the most-recent
+  // sync/force-sync/rollback. Optional with default `[]` so the existing
+  // SyncDashboard test fixture keeps type-checking — App.tsx always threads
+  // it at runtime.
+  lastSyncWarnings?: WarningEntry[];
 }
 
 export function SyncDashboard({
@@ -90,6 +95,7 @@ export function SyncDashboard({
   p4Client = null,
   syncEngine = false,
   onSyncEngineChange = () => {},
+  lastSyncWarnings = [],
 }: SyncDashboardProps) {
   const isSyncRunning = syncState === "running";
   const isBusy = isSyncRunning || historyRollingBack || gitState === "running";
@@ -165,6 +171,7 @@ export function SyncDashboard({
             p4Client={p4Client}
             syncEngine={syncEngine}
             onSyncEngineChange={onSyncEngineChange}
+            lastSyncWarnings={lastSyncWarnings}
           />
         )}
       </TabsContent>

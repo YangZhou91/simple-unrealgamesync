@@ -12,15 +12,28 @@ import { useHistory } from "@/hooks/useHistory";
 import { useUpdater } from "@/hooks/useUpdater";
 import { useState, useCallback, useEffect } from "react";
 import * as commands from "@/lib/commands";
-import type { GitBranchInfo } from "@/lib/types";
+import type { GitBranchInfo, WarningEntry } from "@/lib/types";
 
 function App() {
   const workspaces = useWorkspaces();
   const refreshCurrentCl = workspaces.refreshCurrentCl;
 
+  // Phase 14 (SUMM-23 — checker blocker #1 fix): App owns the last-sync
+  // warnings slot as lifted state. Both useSync (forward/force-sync via
+  // onWarningsChange) and useHistory (rollback via the widened
+  // onRollbackComplete) report UP into this single slot — there is no
+  // per-completion-path branch in the render layer, so all three completion
+  // paths render identically through the same IdlePanel.
+  const [lastSyncWarnings, setLastSyncWarnings] = useState<WarningEntry[]>([]);
+
   const onRollbackComplete = useCallback(
-    (cl: string | null) => {
+    (cl: string | null, warnings: WarningEntry[]) => {
       refreshCurrentCl(cl);
+      // Phase 14 (SUMM-23): route rollback's backend `warnings: merged`
+      // (sync_orchestrator.rs:484) into the lifted slot. Rollback's
+      // SyncCompleted arrives on useHistory's OWN Channel, distinct from
+      // useSync's — without this wiring rollback warnings never render.
+      setLastSyncWarnings(warnings);
     },
     [refreshCurrentCl],
   );
@@ -34,7 +47,9 @@ function App() {
     },
     [refreshCurrentCl, history.loadHistory],
   );
-  const sync = useSync(onSyncComplete);
+  // Phase 14 (SUMM-23): forward/force-sync warnings flow UP via the
+  // onWarningsChange callback (Plan 14-01 Task 2 added the param).
+  const sync = useSync(onSyncComplete, (w: WarningEntry[]) => setLastSyncWarnings(w));
   const git = useGit();
   const behind = useBehindCheck();
   const updater = useUpdater();
@@ -145,6 +160,11 @@ function App() {
 
   const handleRollbackConfirm = (targetCl: string) => {
     if (workspaces.selectedWorkspace) {
+      // Phase 14 (D-02 — checker blocker #2 fix): clear the prior summary
+      // BEFORE the rollback starts so a stale summary never persists into
+      // the new run. useSync's 5 clear sites (Plan 14-01) cover the sync
+      // lifecycle; this + handleGitPull cover rollback + git-pull starts.
+      setLastSyncWarnings([]);
       history.startRollback(targetCl);
       setIsRollbackDialogOpen(false);
     }
@@ -155,6 +175,12 @@ function App() {
       return;
     }
     if (workspaces.selectedWorkspace) {
+      // Phase 14 (D-02 — checker blocker #2 fix): clear the prior summary
+      // BEFORE git-pull starts. git-pull emits empty warnings
+      // (git_service.rs:381-386), so this is a pure clear — it never
+      // populates, only wipes the slate so a stale sync summary does not
+      // persist into a git-pull idle screen.
+      setLastSyncWarnings([]);
       try {
         await git.startGitPull(workspaces.selectedWorkspace.id);
         fetchGitStatus();
@@ -204,6 +230,7 @@ function App() {
             currentStep={sync.currentStep}
             errorInfo={sync.errorInfo}
             lastSyncResult={sync.lastSyncResult}
+            lastSyncWarnings={lastSyncWarnings}
             selectedWorkspace={workspaces.selectedWorkspace}
             targetCl={sync.targetCl}
             onTargetClChange={sync.setTargetCl}

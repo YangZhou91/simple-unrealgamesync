@@ -2,7 +2,8 @@ import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Play, GitPullRequest, GitBranch, ArrowDown, Check, Loader2 } from "lucide-react";
-import type { GitBranchInfo, P4BehindInfo } from "@/lib/types";
+import { CompletionSummaryPanel } from "./CompletionSummaryPanel";
+import type { GitBranchInfo, P4BehindInfo, WarningEntry } from "@/lib/types";
 
 interface IdlePanelProps {
   lastSyncResult: {
@@ -32,6 +33,11 @@ interface IdlePanelProps {
   // both at runtime.
   syncEngine?: boolean;
   onSyncEngineChange?: (v: boolean) => void;
+  // Phase 14 (SUMM-21..23): aggregated warnings from the most-recent
+  // sync/force-sync/rollback. Optional with default `[]` so existing test
+  // fixtures keep type-checking — App.tsx always threads it at runtime.
+  // Empty array renders no summary per D-11 (byte-identical to today).
+  lastSyncWarnings?: WarningEntry[];
 }
 
 export function IdlePanel({
@@ -50,6 +56,7 @@ export function IdlePanel({
   p4Client = null,
   syncEngine = false,
   onSyncEngineChange = () => {},
+  lastSyncWarnings = [],
 }: IdlePanelProps) {
   const [clError, setClError] = useState<string | null>(null);
 
@@ -81,6 +88,18 @@ export function IdlePanel({
             Last synced: CL #{lastSyncResult.cl ?? "?"} &mdash;{" "}
             {lastSyncResult.time} &mdash; {lastSyncResult.fileCount} files
           </p>
+          {/* Phase 14 (SUMM-21): completion summary block rendered DIRECTLY
+              below the lastSyncResult line (D-01 placement). D-11 silent gate
+              — the length > 0 check here is the explicit gate the CONTEXT
+              code_context:109 spec names; CompletionSummaryPanel also returns
+              null on empty as defense-in-depth. NOTE: after a rollback the
+              lastSyncResult line above may show stale pre-rollback CL/time/
+              fileCount values (accepted v1.5 limitation, threat T-14-09);
+              the summary itself derives from lastSyncWarnings and renders
+              correctly regardless. */}
+          {lastSyncWarnings.length > 0 && (
+            <CompletionSummaryPanel warnings={lastSyncWarnings} />
+          )}
         </div>
       ) : (
         <h2 className="text-xl font-semibold text-foreground">Ready to sync</h2>
