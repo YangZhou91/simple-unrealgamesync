@@ -2776,10 +2776,17 @@ pub fn parse_where_line(line: &str) -> Option<(bool, String)> {
 pub fn parse_resolve_line(line: &str) -> Option<(WorkspaceHealthCategory, String)> {
     // quick-260718-eje: route on the `-s` severity tag. Under `-s`, p4 tags the
     // per-file ` - merging` / ` - must resolve` lines as `info:` and the empty
-    // case `No file(s) to resolve.` as `warning:`. A blanket Error-skip is safe
-    // — error-tagged lines are NOT per-file resolve lines (mirrors reconcile).
+    // case as `warning:`. Real resolve lines are ALWAYS `info:`, so we skip
+    // Warning here too — and that Warning skip is LOAD-BEARING: when the audit
+    // passes explicit whitelist paths, p4 emits a per-path
+    // `warning: <path> - no file(s) to resolve.` that DOES carry a ` - `
+    // separator after the path. Without the Warning skip those lines get
+    // mis-parsed as NeedsResolve paths (the 260721-sft false-positive bug: the
+    // panel showed the 3 whitelist globs — Config/.../Source/.../.uproject —
+    // as phantom resolve files on a clean workspace). Exit/Error are also
+    // non-resolve lines (mirrors reconcile).
     let (severity, rest) = split_p4_severity(line);
-    if matches!(severity, P4Severity::Exit | P4Severity::Error) {
+    if matches!(severity, P4Severity::Exit | P4Severity::Error | P4Severity::Warning) {
         return None;
     }
     let line = rest.trim();
@@ -3140,6 +3147,26 @@ Server network estimates: files added/updated/deleted=0/0/0, bytes added/updated
             parse_resolve_line("warning: No file(s) to resolve."),
             None
         );
+    }
+
+    #[test]
+    fn test_parse_resolve_line_per_path_no_file_warning_is_none() {
+        // 260721-sft REGRESSION: the REAL per-path "no file(s) to resolve"
+        // form p4 emits when the audit passes explicit whitelist paths
+        // (`p4 -s resolve -n Config/... Source/... *.uproject`). Unlike the
+        // pathless aggregate above, this form carries a ` - ` separator AFTER
+        // a real path token, so the "no separator" guard does NOT catch it —
+        // only the Warning-severity skip does. Captured from a LIVE run on
+        // client Art_Stream_UGS_zhouyang that returned zero resolves: the
+        // panel had shown these 3 whitelist globs as phantom NeedsResolve
+        // entries (resolve=3) before the Warning-skip fix.
+        for line in [
+            "warning: UnrealEngine/FYGame/Config/... - no file(s) to resolve.",
+            "warning: UnrealEngine/FYGame/Source/... - no file(s) to resolve.",
+            "warning: UnrealEngine/FYGame/FYGame.uproject - no file(s) to resolve.",
+        ] {
+            assert_eq!(parse_resolve_line(line), None, "should be None: {line}");
+        }
     }
 
     #[test]
