@@ -2,6 +2,11 @@
 
 All notable changes to Simple UnrealGameSync will be documented in this file.
 
+## [1.5.1] - 2026-07-21
+
+### Added
+- **"Needs resolve" category in the Workspace Health audit**: the health panel now surfaces files left in a conflict-pending (needs-resolve) state after a sync — files p4 won't overwrite because they're open locally AND the depot has a newer revision, so that file's sync is effectively stuck until you run `p4 resolve`. Detected via a 3rd read-only p4 command (`p4 resolve -n`, preview-only — the audit never actually resolves anything). Appears as the 5th category ("需解决 / Needs resolve") alongside unmapped / missing-on-disk / not-in-depot / differs. If your workspace has no such files the category shows 0 (empty). Read-only like the rest of the audit — no fix actions.
+
 ## [1.5.0] - 2026-07-21
 
 ### Added
