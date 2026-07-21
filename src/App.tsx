@@ -49,7 +49,18 @@ function App() {
   );
   // Phase 14 (SUMM-23): forward/force-sync warnings flow UP via the
   // onWarningsChange callback (Plan 14-01 Task 2 added the param).
-  const sync = useSync(onSyncComplete, (w: WarningEntry[]) => setLastSyncWarnings(w));
+  // CR-WR-01: memoized like onSyncComplete/onRollbackComplete — a raw arrow
+  // here gets a fresh reference every App render, and since App re-renders
+  // ~5×/sec on sync.progress, that propagates into useSync's resetToIdle
+  // dep array and tears down + re-creates the 5s periodic-reconciliation
+  // setInterval before it can ever elapse, defeating the safety net
+  // designed for exactly the running-sync case. setLastSyncWarnings is a
+  // stable setState dispatcher, so [] is safe.
+  const onWarningsChange = useCallback(
+    (w: WarningEntry[]) => setLastSyncWarnings(w),
+    [],
+  );
+  const sync = useSync(onSyncComplete, onWarningsChange);
   const git = useGit();
   const behind = useBehindCheck();
   const updater = useUpdater();
