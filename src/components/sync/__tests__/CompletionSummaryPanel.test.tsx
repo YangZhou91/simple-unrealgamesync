@@ -1,24 +1,10 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
 import type { WarningEntry } from "@/lib/types";
 
-// react-virtuoso cannot measure layout in jsdom, so LogViewer renders zero
-// items inside the test runner. CompletionSummaryPanel's contract is about
-// WHICH strings render in WHICH group + expand/collapse — LogViewer's own
-// virtualization is orthogonal (covered implicitly at runtime). Mock LogViewer
-// to render each line as a plain div so the panel's path/message routing is
-// observable. The mock is hoisted above the component import by vitest.
-vi.mock("../LogViewer", () => ({
-  LogViewer: ({ lines }: { lines: string[] }) => (
-    <div data-testid="log-viewer">
-      {lines.map((line, i) => (
-        <div key={i}>{line}</div>
-      ))}
-    </div>
-  ),
-}));
-
-// Import AFTER the mock so the panel picks up the mocked LogViewer.
+// CompletionSummaryPanel renders its path list directly as whitespace-nowrap
+// lines (no LogViewer) so the panel width can fit its content. Tests assert
+// the rendered path/message text directly.
 import { CompletionSummaryPanel } from "@/components/sync/CompletionSummaryPanel";
 
 // Plain-object factory typed as WarningEntry to avoid TS excess-property

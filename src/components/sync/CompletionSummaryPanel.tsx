@@ -1,6 +1,5 @@
 import { useState } from "react";
 import { Badge } from "@/components/ui/badge";
-import { LogViewer } from "./LogViewer";
 import { AlertTriangle, AlertCircle } from "lucide-react";
 import { groupWarnings } from "@/lib/groupWarnings";
 import type { WarningEntry } from "@/lib/types";
@@ -72,13 +71,20 @@ function SeverityGroup({
         </span>
       </button>
       {expanded && (
-        <div className="h-40 border-t border-border flex flex-col">
+        <div className="border-t border-border">
           {paths.length === 0 ? (
-            <div className="flex h-full items-center justify-center text-sm text-muted">
-              无 / none
-            </div>
+            <div className="py-3 text-center text-sm text-muted">无 / none</div>
           ) : (
-            <LogViewer lines={paths} />
+            <div className="max-h-40 overflow-y-auto py-1">
+              {paths.map((p, i) => (
+                <div
+                  key={i}
+                  className="px-4 py-0.5 text-sm font-mono text-muted whitespace-nowrap"
+                >
+                  {p}
+                </div>
+              ))}
+            </div>
           )}
         </div>
       )}
@@ -123,7 +129,7 @@ export function CompletionSummaryPanel({ warnings }: CompletionSummaryPanelProps
 
   return (
     <div
-      className="w-[42rem] max-w-[90vw] border border-border rounded-md"
+      className="w-fit max-w-[90vw] border border-border rounded-md"
       data-summary-root="true"
     >
       <div className="flex items-center gap-2 px-4 py-2 border-b border-border">
