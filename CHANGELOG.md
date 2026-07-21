@@ -2,6 +2,20 @@
 
 All notable changes to Simple UnrealGameSync will be documented in this file.
 
+## [1.5.0] - 2026-07-21
+
+### Added
+- **Sync completion summary panel** (the v1.5 headline): when a sync completes with warnings/errors, the idle screen now shows "同步完成 — N 条 warning / M 条 error" directly below the "Last synced CL" line, with an expandable severity-grouped path list (Errors group first, then Warnings; each group carries a count badge and the affected depot paths). The summary appears for forward sync, force-sync, AND rollback completions — every path that aggregates warnings. When a sync is clean (zero warnings) the idle screen is unchanged: no empty panel, no disturbance. Phase 13 collects p4 warning/error lines from the drains (the `p4 -s` severity tags plus tail-pattern matching for the `info1:` reconcile-warning trap) into one bounded, deduped per-run list carried on `SyncCompleted`; Phase 14 renders it.
+- **Sync duration in history records**: each history record now shows how long the sync/rollback took (e.g. `4m 12s`).
+- **p4 `-s` scripting mode enabled globally** (infrastructure that enables the warning summary): every p4 spawn now runs in `-s` severity-tagged mode, and all 8 p4 stdout parsers are prefix-hardened to strip `info:`/`warning:`/`error:`/`exit:` tags so the exit-code line never leaks into parsed counts/paths.
+
+### Changed
+- **Git pull is now `--ff-only`**: a diverged UnrealEngine branch now hard-fails instead of silently merging (which had accumulated self-loop "Merge branch..." commits in the engine repo). The pull-failure error now names the divergence and directs you to rebase/reset to origin before retrying. The stash → pull → pop flow is otherwise unchanged.
+
+### Fixed
+- **History tab column wrapping/clipping**: long file counts and CL badges no longer wrap or clip in the fixed-height history rows.
+- **Completion summary panel rendering** (Phase 14 UAT polish): expanding a severity group now actually shows its path list (a LogViewer flex-height collapse left it blank), and the panel width now fits its content — long depot paths are no longer clipped at the right edge.
+
 ## [1.4.3] - 2026-07-14
 
 ### Added
