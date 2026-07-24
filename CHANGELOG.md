@@ -2,6 +2,14 @@
 
 All notable changes to Simple UnrealGameSync will be documented in this file.
 
+## [1.5.2] - 2026-07-24
+
+### Added
+- **"Close Excel before sync"**: a new "Closing Excel" step (mirroring the existing close-Unreal-Editor step) force-kills `EXCEL.EXE` via tasklist+taskkill at all 3 sync entry points — normal sync, rollback, and retry — immediately after the closeUe step. When Excel holds a write lock on a workspace `.xlsx`, p4 sync silently skips that file; this step releases the lock so the sync is complete.
+
+### Changed
+- **Faster sync progress bar**: the byte-level progress bar's heartbeat poll tightened from 2s to 0.5s (4× more responsive), so the bar no longer looks frozen during the long heavy-tail transfer phase where p4 emits no stdout. Displayed transfer speed stays accurate — the rate is computed from real elapsed time, not the old fixed poll interval.
+
 ## [1.5.1] - 2026-07-21
 
 ### Added
