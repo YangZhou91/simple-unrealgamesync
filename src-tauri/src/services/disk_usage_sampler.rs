@@ -11,7 +11,7 @@
 //! This helper reads the kernel-level per-process `total_written_bytes`
 //! counter (cumulative bytes written since process start) for the p4 child
 //! PID via sysinfo's `Process::disk_usage()`. Read-only, no privilege
-//! escalation (same-user process). The caller samples on a ~2s cadence from
+//! escalation (same-user process). The caller samples on a ~0.5s cadence from
 //! the p4Sync heartbeat; each sample yields the delta since the previous
 //! sample, the accumulated total, and a per-second rate.
 //!

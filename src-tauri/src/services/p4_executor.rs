@@ -979,7 +979,7 @@ impl P4Executor {
             }
         });
 
-        // Heartbeat task: sends progress events every 2 seconds when no file progress
+        // Heartbeat task: sends progress events every ~0.5 seconds when no file progress
         // This prevents the UI from appearing "stuck" during large file transfers
         let ch_heartbeat = channel.clone();
         let fc_heartbeat = file_count.clone();
@@ -999,9 +999,16 @@ impl P4Executor {
                 // refreshes ONLY the p4 child pid on each sample. None when
                 // child_pid was unavailable at spawn (count-only fallback).
                 let mut sampler = child_pid.map(DiskUsageSampler::new);
-                // quick-260701-ep7: tighten heartbeat interval from 5s to ~2s
-                // so the byte-level bar updates at a usable cadence.
-                let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(2));
+                // quick-260724-q2o: tighten heartbeat interval from ~2s to ~0.5s.
+                // The byte bar is the ONLY visible progress signal during the
+                // heavy-tailed transfer tail (p4 emits no stdout for minutes
+                // while writing multi-GB files; the count bar hits 100% in ~13s
+                // via front-loaded stdout then goes dead). At 2s the byte bar
+                // looked frozen between jumps; 0.5s is 4x more responsive and
+                // cheap (DiskUsageSampler::sample() reads one sysinfo counter
+                // for the single p4 child pid, not a process-table scan). The
+                // prior 2s itself tightened the original 5s in quick-260701-ep7.
+                let mut interval = tokio::time::interval(tokio::time::Duration::from_millis(500));
                 loop {
                     interval.tick().await;
                     let current = fc_heartbeat.load(Ordering::Relaxed);
