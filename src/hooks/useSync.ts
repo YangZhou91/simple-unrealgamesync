@@ -14,6 +14,7 @@ type StepStatuses = Record<SyncStep, StepStatus>;
 
 const initialStatuses: StepStatuses = {
   closeUe: "pending",
+  closeExcel: "pending",
   cleanDevDir: "pending",
   p4Sync: "pending",
   genProject: "pending",
@@ -37,6 +38,7 @@ export function useSync(
     Record<SyncStep, string | null>
   >({
     closeUe: null,
+    closeExcel: null,
     cleanDevDir: null,
     p4Sync: null,
     genProject: null,
@@ -113,6 +115,7 @@ export function useSync(
     setStepStatuses(initialStatuses);
     setStepDescriptions({
       closeUe: null,
+      closeExcel: null,
       cleanDevDir: null,
       p4Sync: null,
       genProject: null,
@@ -246,6 +249,7 @@ export function useSync(
           setTargetCl("");
           setStepDescriptions({
             closeUe: null,
+            closeExcel: null,
             cleanDevDir: null,
             p4Sync: null,
             genProject: null,
@@ -281,6 +285,7 @@ export function useSync(
           setTargetCl("");
           setStepDescriptions({
             closeUe: null,
+            closeExcel: null,
             cleanDevDir: null,
             p4Sync: null,
             genProject: null,

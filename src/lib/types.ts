@@ -80,7 +80,7 @@ export type SyncEvent =
   | { event: "syncFailed"; data: { step: string; error: string } }
   | { event: "syncCancelled"; data: { step: string } };
 
-export type SyncStep = "closeUe" | "cleanDevDir" | "p4Sync" | "genProject";
+export type SyncStep = "closeUe" | "closeExcel" | "cleanDevDir" | "p4Sync" | "genProject";
 export type SyncState = "idle" | "running" | "error" | "cancelled";
 export type GitState = "idle" | "running" | "success" | "error";
 
@@ -100,12 +100,13 @@ export interface StepInfo {
 
 export const STEP_LABELS: Record<SyncStep, string> = {
   closeUe: "Closing UE Editor",
+  closeExcel: "Closing Excel",
   cleanDevDir: "Cleaning Dev Directory",
   p4Sync: "Syncing Files",
   genProject: "Generating Project Files",
 };
 
-export const STEP_ORDER: SyncStep[] = ["closeUe", "cleanDevDir", "p4Sync", "genProject"];
+export const STEP_ORDER: SyncStep[] = ["closeUe", "closeExcel", "cleanDevDir", "p4Sync", "genProject"];
 
 export interface HistoryRecord {
   changelist: string;

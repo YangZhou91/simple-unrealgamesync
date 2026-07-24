@@ -7,6 +7,7 @@ type StepStatuses = Record<SyncStep, StepStatus>;
 
 const initialStatuses: StepStatuses = {
   closeUe: "pending",
+  closeExcel: "pending",
   cleanDevDir: "pending",
   p4Sync: "pending",
   genProject: "pending",

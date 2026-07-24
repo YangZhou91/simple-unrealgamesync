@@ -97,15 +97,17 @@ describe("ErrorPanel", () => {
 });
 
 describe("StepIndicator", () => {
-  it("renders all 4 steps", () => {
+  it("renders all 5 steps", () => {
     const statuses = {
       closeUe: "pending" as const,
+      closeExcel: "pending" as const,
       cleanDevDir: "pending" as const,
       p4Sync: "pending" as const,
       genProject: "pending" as const,
     };
     render(<StepIndicator stepStatuses={statuses} />);
     expect(screen.getByText("Closing UE Editor")).toBeDefined();
+    expect(screen.getByText("Closing Excel")).toBeDefined();
     expect(screen.getByText("Cleaning Dev Directory")).toBeDefined();
     expect(screen.getByText("Syncing Files")).toBeDefined();
     expect(screen.getByText("Generating Project Files")).toBeDefined();
@@ -116,6 +118,7 @@ describe("SyncDashboard", () => {
   const baseProps = {
     stepStatuses: {
       closeUe: "pending" as const,
+      closeExcel: "pending" as const,
       cleanDevDir: "pending" as const,
       p4Sync: "pending" as const,
       genProject: "pending" as const,
@@ -130,6 +133,7 @@ describe("SyncDashboard", () => {
     onTargetClChange: (_cl: string) => {},
     stepDescriptions: {
       closeUe: null as string | null,
+      closeExcel: null as string | null,
       cleanDevDir: null as string | null,
       p4Sync: null as string | null,
       genProject: null as string | null,
@@ -189,6 +193,7 @@ describe("RunningPanel prep state", () => {
   const baseProps = {
     stepStatuses: {
       closeUe: "pending" as const,
+      closeExcel: "pending" as const,
       cleanDevDir: "pending" as const,
       p4Sync: "pending" as const,
       genProject: "pending" as const,
@@ -202,6 +207,7 @@ describe("RunningPanel prep state", () => {
     onTargetClChange: (_cl: string) => {},
     stepDescriptions: {
       closeUe: null as string | null,
+      closeExcel: null as string | null,
       cleanDevDir: null as string | null,
       p4Sync: null as string | null,
       genProject: null as string | null,
@@ -284,6 +290,7 @@ describe("RunningPanel p4SyncOverrun byte-bar priority", () => {
   const baseProps = {
     stepStatuses: {
       closeUe: "pending" as const,
+      closeExcel: "pending" as const,
       cleanDevDir: "pending" as const,
       p4Sync: "pending" as const,
       genProject: "pending" as const,
@@ -297,6 +304,7 @@ describe("RunningPanel p4SyncOverrun byte-bar priority", () => {
     onTargetClChange: (_cl: string) => {},
     stepDescriptions: {
       closeUe: null as string | null,
+      closeExcel: null as string | null,
       cleanDevDir: null as string | null,
       p4Sync: null as string | null,
       genProject: null as string | null,
@@ -385,6 +393,7 @@ describe("RunningPanel render-state log (quick-260710-sxf)", () => {
   const baseProps = {
     stepStatuses: {
       closeUe: "pending" as const,
+      closeExcel: "pending" as const,
       cleanDevDir: "pending" as const,
       p4Sync: "pending" as const,
       genProject: "pending" as const,
@@ -398,6 +407,7 @@ describe("RunningPanel render-state log (quick-260710-sxf)", () => {
     onTargetClChange: (_cl: string) => {},
     stepDescriptions: {
       closeUe: null as string | null,
+      closeExcel: null as string | null,
       cleanDevDir: null as string | null,
       p4Sync: null as string | null,
       genProject: null as string | null,
