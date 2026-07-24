@@ -134,6 +134,26 @@ impl SyncOrchestrator {
         }
         step.done("");
 
+        // Step 1b: Close Excel (releases write locks on .xlsx so p4 sync can update them)
+        let step = StepScope::new("closeExcel");
+        if let Err(e) = self.close_excel(&channel).await {
+            error!("[sync] step=closeExcel failed: {e}");
+            step.failed();
+            let _ = channel.send(SyncEvent::SyncFailed {
+                step: "closeExcel".to_string(),
+                error: e.to_string(),
+            });
+            let _ = app.emit(
+                "sync-state",
+                SyncStatePayload {
+                    state: "error".into(),
+                    detail: Some(format!("Sync failed at step {}: {}", "closeExcel", e)),
+                },
+            );
+            return Err(e);
+        }
+        step.done("");
+
         // Step 2: Clean Dev Directory
         let step = StepScope::new("cleanDevDir");
         info!("[sync] root={}", workspace.root_path);
@@ -388,6 +408,25 @@ impl SyncOrchestrator {
         }
         step.done("");
 
+        // Step 1b: Close Excel (releases write locks on .xlsx so p4 sync can update them)
+        let step = StepScope::new("closeExcel");
+        if let Err(e) = self.close_excel(&channel).await {
+            step.failed();
+            let _ = channel.send(SyncEvent::SyncFailed {
+                step: "closeExcel".to_string(),
+                error: e.to_string(),
+            });
+            let _ = app.emit(
+                "sync-state",
+                SyncStatePayload {
+                    state: "error".into(),
+                    detail: Some(format!("Sync failed at step {}: {}", "closeExcel", e)),
+                },
+            );
+            return Err(e);
+        }
+        step.done("");
+
         // Step 2: p4 sync @CL (NO clean_dev_dir -- D-06)
         let step = StepScope::new("p4Sync");
         info!("[sync] target_cl={}", target_cl);
@@ -570,6 +609,16 @@ impl SyncOrchestrator {
                     }
                 }
             }
+            "closeExcel" => {
+                let s = StepScope::new("closeExcel");
+                match self.close_excel(&channel).await {
+                    Ok(()) => s.done(""),
+                    Err(e) => {
+                        s.failed();
+                        return Err(e);
+                    }
+                }
+            }
             "cleanDevDir" => {
                 let s = StepScope::new("cleanDevDir");
                 match self.clean_dev_dir(&workspace, &channel).await {
@@ -689,6 +738,60 @@ impl SyncOrchestrator {
 
         let _ = channel.send(SyncEvent::StepCompleted {
             step: "closeUe".to_string(),
+            success: true,
+        });
+
+        Ok(())
+    }
+
+    async fn close_excel(&self, channel: &CountingChannel) -> Result<(), AppError> {
+        let _ = channel.send(SyncEvent::StepStarted {
+            step: "closeExcel".to_string(),
+            description: "Checking for Excel...".to_string(),
+        });
+
+        // Use tasklist to find any EXCEL.EXE process. tasklist prints the image
+        // name uppercase as EXCEL.EXE; a case-sensitive contains match is enough
+        // (mirrors close_ue's bare contains("UnrealEditor")).
+        let output = tokio::process::Command::new("tasklist")
+            .args(["/NH"])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .creation_flags(CREATE_NO_WINDOW)
+            .output()
+            .await
+            .map_err(AppError::ProcessSpawn)?;
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        for line in stdout.lines() {
+            if !line.contains("EXCEL.EXE") {
+                continue;
+            }
+            // Format: "name.exe    PID Console    N mem K"
+            let parts: Vec<&str> = line.split_whitespace().collect();
+            if parts.len() >= 2 {
+                let name = parts[0];
+                let pid = parts[1];
+                info!("[closeExcel] found {name} (PID {pid}), killing...");
+                let kill_output = tokio::process::Command::new("taskkill")
+                    .args(["/F", "/T", "/PID", pid])
+                    .stdin(std::process::Stdio::null())
+                    .stdout(std::process::Stdio::piped())
+                    .stderr(std::process::Stdio::null())
+                    .creation_flags(CREATE_NO_WINDOW)
+                    .output()
+                    .await
+                    .map_err(AppError::ProcessSpawn)?;
+                if !kill_output.status.success() {
+                    let stderr = String::from_utf8_lossy(&kill_output.stderr);
+                    warn!("[closeExcel] taskkill PID {pid} failed: {}", stderr.trim());
+                }
+            }
+        }
+
+        let _ = channel.send(SyncEvent::StepCompleted {
+            step: "closeExcel".to_string(),
             success: true,
         });
 
@@ -1109,7 +1212,7 @@ fn now_string() -> String {
 pub fn is_known_step(step: &str) -> bool {
     matches!(
         step,
-        "closeUe" | "cleanDevDir" | "p4Sync" | "forceSync" | "genProject"
+        "closeUe" | "closeExcel" | "cleanDevDir" | "p4Sync" | "forceSync" | "genProject"
     )
 }
 
@@ -1147,6 +1250,7 @@ mod tests {
     #[test]
     fn test_is_known_step_all_valid() {
         assert!(is_known_step("closeUe"));
+        assert!(is_known_step("closeExcel"));
         assert!(is_known_step("cleanDevDir"));
         assert!(is_known_step("p4Sync"));
         assert!(is_known_step("forceSync"));
