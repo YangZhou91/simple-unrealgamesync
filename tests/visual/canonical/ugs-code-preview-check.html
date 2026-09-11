@@ -1,0 +1,1640 @@
+<!doctype html>
+<html lang="en" data-visualize-standalone>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval' 'wasm-unsafe-eval' blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; style-src 'unsafe-inline' blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; img-src blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; font-src blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; media-src blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; worker-src blob:; connect-src blob: data:; frame-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
+<title>Ugs Code Redesign</title>
+<style>:root{color-scheme:light dark;background:light-dark(rgb(255 255 255), rgb(24 24 24))}html,body{margin:0}body{box-sizing:border-box;padding:1rem;background:inherit}iframe{display:block;width:100%;height:calc(100vh - 2rem);margin:0 auto;border:0}</style>
+</head>
+<body>
+<iframe sandbox="allow-scripts" referrerpolicy="no-referrer" title="Ugs Code Redesign" srcdoc="&lt;!doctype html&gt;
+&lt;html lang=&quot;en&quot; data-visualize-standalone&gt;
+&lt;head&gt;
+&lt;meta charset=&quot;utf-8&quot;&gt;
+&lt;meta name=&quot;viewport&quot; content=&quot;width=device-width, initial-scale=1&quot;&gt;
+&lt;meta name=&quot;referrer&quot; content=&quot;no-referrer&quot;&gt;
+&lt;meta http-equiv=&quot;Content-Security-Policy&quot; content=&quot;default-src &#x27;none&#x27;; script-src &#x27;unsafe-inline&#x27; &#x27;unsafe-eval&#x27; &#x27;wasm-unsafe-eval&#x27; blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; style-src &#x27;unsafe-inline&#x27; blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; img-src blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; font-src blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; media-src blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; worker-src blob:; connect-src blob: data:; frame-src &#x27;none&#x27;; object-src &#x27;none&#x27;; base-uri &#x27;none&#x27;; form-action &#x27;none&#x27;&quot;&gt;
+&lt;title&gt;Ugs Code Redesign&lt;/title&gt;
+&lt;style&gt;:root {
+  color-scheme: light dark;
+  background-color: var(
+    --background,
+    var(--color-background-primary, light-dark(rgb(255 255 255), rgb(24 24 24)))
+  ) !important;
+
+  /* Agent-facing contract; keep in sync with SKILL.md. */
+  --background: var(
+    --color-background-primary,
+    light-dark(rgb(255 255 255), rgb(24 24 24))
+  );
+  --foreground: var(
+    --color-text-primary,
+    light-dark(rgb(26 28 31), rgb(255 255 255))
+  );
+  --card: color-mix(in oklab, var(--foreground) 5%, var(--background));
+  --card-foreground: var(
+    --color-text-primary,
+    light-dark(rgb(26 28 31), rgb(255 255 255))
+  );
+  --popover: var(
+    --color-background-secondary,
+    light-dark(rgb(255 255 255), rgb(45 45 45))
+  );
+  --popover-foreground: var(
+    --color-text-primary,
+    light-dark(rgb(26 28 31), rgb(255 255 255))
+  );
+  --primary: var(
+    --color-text-info,
+    light-dark(rgb(51 156 255), rgb(131 195 255))
+  );
+  --primary-foreground: var(
+    --color-text-inverse,
+    light-dark(rgb(255 255 255), rgb(13 13 13))
+  );
+  --secondary: var(
+    --color-background-secondary,
+    light-dark(rgb(255 255 255 / 96%), rgb(54 54 54 / 96%))
+  );
+  --secondary-foreground: var(
+    --color-text-primary,
+    light-dark(rgb(26 28 31), rgb(255 255 255))
+  );
+  --muted: color-mix(in srgb, var(--foreground) 10%, transparent);
+  --muted-foreground: var(
+    --color-text-secondary,
+    light-dark(rgb(26 28 31 / 49.4%), rgb(255 255 255 / 49.8%))
+  );
+  --accent: var(
+    --color-background-info,
+    light-dark(rgb(229 242 255), rgb(13 39 63))
+  );
+  --accent-foreground: var(
+    --color-text-info,
+    light-dark(rgb(51 156 255), rgb(131 195 255))
+  );
+  --destructive: var(
+    --color-text-warning,
+    light-dark(rgb(226 85 7), rgb(255 133 73))
+  );
+  --border: var(
+    --color-border-secondary,
+    light-dark(rgb(26 28 31 / 8%), rgb(255 255 255 / 8.2%))
+  );
+  --input: var(
+    --color-border-primary,
+    light-dark(
+      rgb(26 28 31 / 11.8%),
+      color-mix(in oklab, rgb(0 0 0) 10%, transparent)
+    )
+  );
+  --ring: var(
+    --color-ring-primary,
+    light-dark(rgb(51 156 255), rgb(131 195 255 / 76%))
+  );
+  --font-size-base: var(--font-text-md-size, 14px);
+  --blue: light-dark(rgb(51 156 255), rgb(51 156 255));
+  --orange: light-dark(rgb(226 85 7), rgb(251 106 34));
+  --green: light-dark(rgb(0 162 64), rgb(64 201 119));
+  --red: light-dark(rgb(224 46 42), rgb(255 103 100));
+  --purple: light-dark(rgb(146 79 247), rgb(173 123 249));
+  --yellow: light-dark(rgb(255 195 0), rgb(255 210 64));
+  --viz-series-1: var(--primary);
+  --viz-series-2: light-dark(rgb(243 136 59), rgb(245 154 86));
+  --viz-series-3: light-dark(rgb(93 201 119), rgb(116 213 139));
+  --viz-series-4: light-dark(rgb(235 119 177), rgb(240 143 192));
+  --viz-series-5: light-dark(rgb(155 121 236), rgb(170 145 239));
+  --viz-series-6: light-dark(rgb(58 185 177), rgb(90 203 194));
+
+  /* Internal implementation variables; not part of the agent contract. */
+  --font-sans: -apple-system, system-ui, &quot;Segoe UI&quot;, sans-serif;
+  --font-mono:
+    ui-monospace, SFMono-Regular, &quot;SF Mono&quot;, Menlo, Consolas, &quot;Liberation Mono&quot;,
+    monospace;
+  --font-size-normal: max(11px, var(--font-size-base));
+  --font-size-tooltip: calc(var(--font-size-base) - 1px);
+  --font-size-small: max(11px, calc(var(--font-size-base) - 2px));
+  --font-size-h1: calc(var(--font-size-normal) * 1.7142857143);
+  --font-size-h2: calc(var(--font-size-normal) * 1.4285714286);
+  --font-size-h3: calc(var(--font-size-normal) * 1.2857142857);
+  --font-weight-normal: 430;
+  --font-weight-medium: 500;
+  --icon-size: 16px;
+  --line-height-normal: calc(var(--font-size-normal) * 1.5);
+  --line-height-tooltip: calc(var(--font-size-tooltip) * 1.4285714286);
+  --line-height-small: calc(var(--font-size-small) + 4px);
+  --corner-shape: round;
+  --radius: var(--border-radius-lg, 10px);
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-2xl: calc(var(--radius) * 1.6);
+  --radius-full: 9999px;
+  --shadow-sm: 0 1px 2px -1px rgb(0 0 0 / 8%);
+  --checkmark-image: url(&quot;data:image/svg+xml,%3Csvg xmlns=&#x27;http://www.w3.org/2000/svg&#x27; viewBox=&#x27;0 0 17 17&#x27;%3E%3Cpath d=&#x27;M12.8961 3.64101C13.1297 3.41418 13.4984 3.37523 13.7779 3.56581C14.0571 3.75635 14.1554 4.11331 14.0299 4.41347L13.9615 4.53847L7.71151 13.7045C7.59411 13.8767 7.4063 13.9877 7.19881 14.0072C6.99136 14.0267 6.78564 13.9533 6.63826 13.806L2.88826 10.056L2.79842 9.9457C2.6192 9.67407 2.64927 9.30496 2.88826 9.06581C3.12738 8.82669 3.49647 8.79676 3.76815 8.97597L3.8785 9.06581L7.03084 12.2182L12.8053 3.74941L12.8961 3.64101Z&#x27;/%3E%3C/svg%3E&quot;);
+
+  /* Legacy aliases; not part of the current agent contract. */
+  --viz-bg: transparent;
+  --viz-panel: var(--card);
+  --viz-border: var(--border);
+  --viz-text: var(--foreground);
+  --viz-muted: var(--muted-foreground);
+  --viz-accent: var(--primary);
+  --viz-accent-text: var(--primary-foreground);
+  --viz-accent-bg: var(--accent);
+  --viz-font-size: var(--font-size-base);
+  --viz-warning: var(--destructive);
+}
+
+:root[data-theme=&quot;light&quot;] {
+  color-scheme: light;
+}
+
+:root[data-theme=&quot;dark&quot;] {
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html &gt; body {
+  /* Preserve MCP aliases for older inline renderers without creating :root cycles. */
+  --color-background-primary: var(
+    --background,
+    light-dark(rgb(255 255 255), rgb(24 24 24))
+  );
+  --color-text-primary: var(
+    --foreground,
+    light-dark(rgb(26 28 31), rgb(255 255 255))
+  );
+  --color-border-secondary: var(
+    --border,
+    light-dark(rgb(26 28 31 / 8%), rgb(255 255 255 / 8.2%))
+  );
+
+  margin: 0;
+  padding: var(--visualize-paint-gutter, 0px);
+  color: var(--foreground);
+  background: transparent !important;
+  font-family: var(--font-sans) !important;
+  font-size: var(--font-size-normal);
+  font-weight: var(--font-weight-normal);
+  line-height: var(--line-height-normal);
+}
+
+a {
+  color: color-mix(in srgb, var(--viz-accent) 80%, var(--viz-text) 20%);
+  cursor: pointer;
+  font-weight: var(--font-weight-medium, 500);
+  text-decoration: none;
+  text-underline-offset: 2px;
+}
+
+a:is(:hover, :focus-visible) {
+  text-decoration-line: underline;
+  text-decoration-style: dashed;
+  text-decoration-thickness: 0.5px;
+}
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6,
+p {
+  margin-block: 0;
+}
+
+h1 {
+  font-size: var(--font-size-h1);
+  font-weight: var(--font-weight-medium);
+  line-height: 1.25;
+}
+
+h2 {
+  font-size: var(--font-size-h2);
+  font-weight: var(--font-weight-medium);
+  line-height: 1.25;
+}
+
+h3,
+h4,
+h5,
+h6 {
+  font-size: var(--font-size-h3);
+  font-weight: var(--font-weight-medium);
+  line-height: 1.3;
+}
+
+b,
+strong,
+th {
+  font-weight: var(--font-weight-medium);
+}
+
+code:not(pre code) {
+  display: inline;
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+  corner-shape: var(--corner-shape);
+  background: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 0.92em;
+  overflow-wrap: anywhere;
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
+  word-break: break-word;
+}
+
+.table-responsive {
+  width: 100%;
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  color: var(--foreground);
+  font: inherit;
+  text-align: start;
+}
+
+.table :is(th, td) {
+  padding-block: 10px;
+  padding-inline: 0 24px;
+  overflow-wrap: anywhere;
+  border-bottom: 1px solid var(--border);
+  text-align: start;
+  vertical-align: top;
+}
+
+.table-responsive &gt; .table :is(th, td) {
+  overflow-wrap: break-word;
+}
+
+.table :is(th, td):last-child {
+  padding-inline-end: 0;
+}
+
+.table :is(caption, thead th) {
+  font-weight: 600;
+}
+
+.table thead th {
+  padding-block: 8px;
+  border-bottom-color: color-mix(in srgb, var(--foreground) 16%, transparent);
+}
+
+.table tbody tr:last-child :is(th, td) {
+  border-bottom: 0;
+}
+
+.table.table-sm :is(th, td) {
+  padding-block: 6px;
+}
+
+.table.table-sm :is(th, td):not(:last-child) {
+  padding-inline-end: 16px;
+}
+
+.table :is(.text-end, [align=&quot;right&quot;]) {
+  text-align: end;
+  font-variant-numeric: tabular-nums;
+}
+
+.table :is(.text-center, [align=&quot;center&quot;]) {
+  text-align: center;
+}
+
+.table .text-nowrap {
+  white-space: nowrap;
+}
+
+#widget {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: 100%;
+  padding: 0;
+  background: transparent !important;
+}
+
+.card {
+  min-width: 0;
+  padding: 12px;
+  overflow: hidden;
+  overflow-wrap: break-word;
+  border-radius: var(--radius-2xl);
+  corner-shape: var(--corner-shape);
+  color: var(--card-foreground);
+  background: var(--card);
+}
+
+#widget &gt; :not(.card, .progress) {
+  width: 100% !important;
+  max-width: none !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
+.tooltip {
+  position: fixed;
+  z-index: 50;
+  top: 0;
+  left: 0;
+  width: max-content;
+  max-width: min(
+    20rem,
+    var(--tooltip-available-width, calc(100vw - 10px)),
+    calc(100vw - 10px)
+  );
+  max-height: min(
+    var(--tooltip-available-height, calc(100vh - 10px)),
+    calc(100vh - 10px)
+  );
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  corner-shape: var(--corner-shape);
+  color: var(--popover-foreground);
+  background: var(--popover);
+  box-shadow: none;
+  font-size: var(--font-size-tooltip);
+  line-height: var(--line-height-tooltip);
+  overflow-wrap: break-word;
+  white-space: normal;
+  pointer-events: none;
+  user-select: none;
+}
+
+.viz-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(max(180px, 24%), 1fr));
+  gap: 10px;
+}
+
+.viz-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.viz-stat-value {
+  font-size: var(--font-size-h2);
+  font-weight: var(--font-weight-medium);
+  line-height: 1.25;
+}
+
+.viz-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+hr {
+  width: 100%;
+  height: 1px;
+  margin-block: 6px;
+  border: 0;
+  background: var(--border);
+}
+
+.nav {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 4px;
+}
+
+.progress {
+  display: flex;
+  height: 8px;
+  margin-block: calc((var(--line-height-normal, 1.5em) - 8px) / 2);
+  overflow: hidden;
+  border: 0;
+  border-radius: var(--radius-full);
+  background: var(--muted);
+}
+
+.progress-bar:only-child {
+  border-radius: var(--radius-full);
+}
+
+.progress-bar {
+  height: 100%;
+  flex-shrink: 0;
+  border: 0;
+  background: var(--viz-series-1);
+}
+
+.viz-badge {
+  padding: 3px 8px;
+  border-radius: var(--radius-full);
+  color: var(--accent-foreground);
+  background: var(--accent);
+  font-weight: var(--font-weight-medium);
+}
+
+small,
+.text-small,
+.viz-badge {
+  font-size: var(--font-size-small);
+  line-height: var(--line-height-small);
+}
+
+.text-muted {
+  color: var(--muted-foreground);
+}
+
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.viz-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.viz-controls &gt; .form-label {
+  display: grid;
+  min-width: min(100%, 260px);
+  flex: 1 1 280px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: baseline;
+  gap: 2px 12px;
+  margin-bottom: 0;
+}
+
+.viz-controls &gt; .form-label &gt; :is(.form-control, .form-range, .form-select) {
+  grid-column: 1 / -1;
+}
+
+.btn,
+.nav-link,
+.form-check-input,
+.form-control,
+.form-range,
+.form-select {
+  font: inherit;
+}
+
+.btn,
+.nav-link {
+  appearance: button;
+  display: inline-flex;
+  inline-size: fit-content;
+  max-inline-size: 100%;
+  min-height: 28px;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  margin: 0;
+  padding: 0 8px;
+  -webkit-app-region: no-drag;
+  border: 1px solid var(--input);
+  border-radius: var(--radius-lg);
+  corner-shape: var(--corner-shape);
+  color: var(--secondary-foreground);
+  background: var(--secondary);
+  cursor: var(--cursor-interaction, pointer);
+  text-align: center;
+  text-decoration: none;
+  white-space: nowrap;
+  user-select: none;
+  -webkit-font-smoothing: antialiased;
+}
+
+.btn:is(.btn-block, .viz-tile) {
+  inline-size: 100%;
+}
+
+.btn.viz-tile {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+a.btn {
+  cursor: pointer;
+  text-decoration: none;
+}
+
+.btn:not(:disabled):hover,
+.nav-link:not(:disabled):not([aria-disabled=&quot;true&quot;]):hover {
+  background: color-mix(in srgb, var(--foreground) 6%, var(--secondary));
+}
+
+.btn-primary {
+  border-color: transparent;
+  color: var(--primary-foreground);
+  background: var(--foreground);
+  background-clip: padding-box;
+}
+
+.btn-primary .text-muted {
+  color: color-mix(in srgb, var(--primary-foreground) 50%, transparent);
+}
+
+.btn-primary:not(:disabled):hover {
+  background: color-mix(in srgb, var(--foreground) 80%, transparent);
+  background-clip: padding-box;
+}
+
+.btn-ghost {
+  border-color: transparent;
+  color: var(--muted-foreground);
+  background: transparent;
+}
+
+.btn-ghost:not(:disabled):hover {
+  color: var(--foreground);
+  background: color-mix(in srgb, var(--foreground) 6%, var(--secondary));
+}
+
+.nav-pills .nav-link {
+  min-width: 0;
+  border-color: transparent;
+  color: var(--muted-foreground);
+  background: transparent;
+}
+
+.nav-justified .nav-link {
+  flex: 1 1 0;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+.nav-pills .nav-link.active {
+  color: var(--foreground);
+  background: var(--muted);
+}
+
+.btn:disabled,
+.nav-link:disabled,
+.nav-link[aria-disabled=&quot;true&quot;] {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+[data-lucide] {
+  stroke-width: 1.6;
+}
+
+.form-label {
+  display: block;
+  margin-bottom: 6px;
+  color: var(--foreground);
+}
+
+.form-control {
+  display: block;
+  width: 100%;
+  min-height: 28px;
+  padding: 0 8px;
+  outline: none;
+  border: 1px solid var(--input);
+  border-radius: var(--radius-lg);
+  corner-shape: var(--corner-shape);
+  color: var(--foreground);
+  background: var(--secondary);
+}
+
+.form-control::placeholder {
+  color: var(--muted-foreground);
+}
+
+.form-control[type=&quot;file&quot;] {
+  padding: 0;
+  overflow: hidden;
+  cursor: var(--cursor-interaction, pointer);
+}
+
+.form-control[type=&quot;file&quot;]::file-selector-button {
+  min-height: 26px;
+  margin-right: 8px;
+  padding: 0 8px;
+  border: 0;
+  border-right: 1px solid var(--input);
+  color: var(--secondary-foreground);
+  background: var(--secondary);
+  cursor: inherit;
+  font: inherit;
+}
+
+.form-control[type=&quot;file&quot;]:not(:disabled):hover::file-selector-button {
+  background: color-mix(in srgb, var(--foreground) 6%, var(--secondary));
+}
+
+.form-control-color[type=&quot;color&quot;] {
+  width: 40px;
+  height: 28px;
+  padding: 3px;
+  cursor: var(--cursor-interaction, pointer);
+}
+
+.form-control-color[type=&quot;color&quot;]::-webkit-color-swatch-wrapper {
+  padding: 0;
+}
+
+.form-control-color[type=&quot;color&quot;]::-webkit-color-swatch {
+  border: 0;
+  border-radius: calc(var(--radius-lg) - 4px);
+  corner-shape: var(--corner-shape);
+}
+
+textarea.form-control {
+  height: auto;
+  min-height: 72px;
+  padding: 8px 10px;
+  resize: vertical;
+}
+
+.form-control:focus-visible {
+  border-color: var(--ring);
+  box-shadow: inset 0 0 0 1px var(--ring);
+}
+
+.form-control:disabled,
+.form-select:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+.form-select {
+  appearance: none;
+  display: block;
+  width: 100%;
+  min-height: 28px;
+  margin: 0;
+  padding: 0 32px 0 8px;
+  outline: none;
+  border: 1px solid var(--input);
+  border-radius: var(--radius-lg);
+  corner-shape: var(--corner-shape);
+  color: var(--foreground);
+  background-color: var(--secondary);
+  background-image:
+    linear-gradient(45deg, transparent 50%, var(--muted-foreground) 50%),
+    linear-gradient(135deg, var(--muted-foreground) 50%, transparent 50%);
+  background-position:
+    calc(100% - 14px) 50%,
+    calc(100% - 10px) 50%;
+  background-repeat: no-repeat;
+  background-size: 4px 4px;
+  cursor: var(--cursor-interaction, default);
+}
+
+.form-select:not(:disabled):hover {
+  background-color: color-mix(in srgb, var(--foreground) 6%, var(--secondary));
+}
+
+.form-select:focus-visible {
+  border-color: var(--ring);
+  box-shadow: inset 0 0 0 1px var(--ring);
+}
+
+.form-check {
+  display: flex;
+  min-height: 20px;
+  align-items: center;
+  gap: 6px;
+}
+
+.form-check-input {
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  flex: 0 0 auto;
+  margin: 0;
+  border: 1px solid var(--input);
+  color: var(--primary-foreground);
+  background-color: transparent;
+  cursor: var(--cursor-interaction, default);
+  transition:
+    background-color 150ms,
+    border-color 150ms,
+    box-shadow 150ms;
+}
+
+.form-check:not(.form-switch) .form-check-input[type=&quot;checkbox&quot;] {
+  border-color: var(--input);
+  border-radius: var(--radius-sm);
+  corner-shape: var(--corner-shape);
+  background-color: var(--secondary);
+  box-shadow: var(--shadow-sm);
+}
+
+.form-check:not(.form-switch)
+  .form-check-input:not(:disabled):not(:checked):hover {
+  background-color: var(--card);
+}
+
+.form-check:not(.form-switch) .form-check-input[type=&quot;checkbox&quot;]:checked {
+  border-color: var(--primary);
+  background-color: var(--primary);
+}
+
+.form-check:not(.form-switch)
+  .form-check-input[type=&quot;checkbox&quot;]:checked::before {
+  display: block;
+  width: 100%;
+  height: 100%;
+  background: var(--primary-foreground);
+  content: &quot;&quot;;
+  mask: var(--checkmark-image) center / 12px 12px no-repeat;
+}
+
+.form-check-input[type=&quot;radio&quot;] {
+  width: 14px;
+  height: 14px;
+  border-radius: var(--radius-full);
+}
+
+.form-check-input[type=&quot;radio&quot;]:checked {
+  border: 2px solid var(--primary);
+  background:
+    radial-gradient(circle, var(--primary-foreground) 0 2.5px, transparent 3px),
+    var(--primary);
+}
+
+.form-check:not(.form-switch) .form-check-input:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+.form-check:not(.form-switch) .form-check-input:disabled {
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
+.form-check:not(.form-switch) .form-check-input:disabled + .form-check-label {
+  cursor: not-allowed;
+}
+
+.form-switch .form-check-input:disabled,
+.form-switch .form-check-input:disabled + .form-check-label {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.form-check-label {
+  color: var(--foreground);
+  cursor: var(--cursor-interaction, default);
+}
+
+.form-switch .form-check-input {
+  position: relative;
+  width: 32px;
+  height: 20px;
+  border: 0;
+  border-radius: var(--radius-full);
+  background: var(--muted);
+  box-shadow: none;
+  transition: background-color 200ms cubic-bezier(0, 0, 0.2, 1);
+}
+
+.form-switch .form-check-input::before {
+  position: absolute;
+  top: 50%;
+  left: 0;
+  width: 16px;
+  height: 16px;
+  box-sizing: border-box;
+  border: 1px solid light-dark(var(--primary-foreground), var(--foreground));
+  border-radius: var(--radius-full);
+  background: light-dark(var(--primary-foreground), var(--foreground));
+  box-shadow: var(--shadow-sm);
+  content: &quot;&quot;;
+  transform: translate(2px, -50%);
+  transition: transform 200ms cubic-bezier(0, 0, 0.2, 1);
+}
+
+.form-switch .form-check-input:checked {
+  background: var(--primary);
+}
+
+.form-switch .form-check-input:checked::before {
+  transform: translate(14px, -50%);
+}
+
+.form-switch .form-check-input:focus-visible {
+  box-shadow: 0 0 0 2px var(--ring);
+}
+
+.form-range {
+  appearance: none;
+  display: block;
+  width: 100%;
+  height: 28px;
+  flex: 1;
+  margin: 0;
+  padding: 0;
+  outline: none;
+  border: 0;
+  accent-color: var(--primary);
+  background: linear-gradient(
+      color-mix(in srgb, var(--foreground) 7%, transparent),
+      color-mix(in srgb, var(--foreground) 7%, transparent)
+    )
+    center / 100% 2px no-repeat;
+}
+
+.form-range::-webkit-slider-runnable-track {
+  height: 28px;
+  background: transparent;
+}
+
+.form-range::-webkit-slider-thumb {
+  appearance: none;
+  width: 20px;
+  height: 20px;
+  margin-top: 4px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  background: light-dark(var(--primary-foreground), var(--foreground));
+}
+
+.form-range:focus-visible::-webkit-slider-thumb {
+  border-color: var(--ring);
+  box-shadow: inset 0 0 0 1px var(--ring);
+}
+
+.form-range::-moz-range-track {
+  height: 28px;
+  background: transparent;
+}
+
+.form-range::-moz-range-thumb {
+  width: 20px;
+  height: 20px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  background: light-dark(var(--primary-foreground), var(--foreground));
+}
+
+.form-range:focus-visible::-moz-range-thumb {
+  border-color: var(--ring);
+  box-shadow: inset 0 0 0 1px var(--ring);
+}
+
+.form-range:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+.btn:not(.btn-primary, .viz-tile):is(
+  [aria-pressed=&quot;true&quot;],
+  [aria-selected=&quot;true&quot;],
+  .is-selected
+) {
+  border-color: var(--primary);
+  color: var(--primary-foreground);
+  background: var(--primary);
+}
+
+.btn.viz-tile:is([aria-pressed=&quot;true&quot;], [aria-selected=&quot;true&quot;], .is-selected) {
+  border-color: var(--primary);
+  box-shadow: inset 0 0 0 1px var(--primary);
+}
+
+.btn:focus-visible,
+.nav-link:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+@media (pointer: coarse) {
+  .btn,
+  .nav-link,
+  .form-control,
+  .form-select {
+    min-width: 44px;
+    min-height: 44px;
+  }
+
+  /* Keep small-screen WebKit from zooming when a text field receives focus. */
+  .form-control,
+  .form-select {
+    font-size: max(16px, var(--font-size-normal));
+  }
+
+  .form-control[type=&quot;file&quot;]::file-selector-button {
+    min-width: 44px;
+    min-height: 44px;
+  }
+
+  .form-control-color[type=&quot;color&quot;] {
+    width: 44px;
+    height: 44px;
+  }
+
+  .form-control:is(
+    [type=&quot;date&quot;],
+    [type=&quot;datetime-local&quot;],
+    [type=&quot;month&quot;],
+    [type=&quot;time&quot;],
+    [type=&quot;week&quot;]
+  ) {
+    min-width: 0;
+    max-width: 100%;
+    padding-block: 8px;
+  }
+
+  .form-check {
+    min-height: 44px;
+    padding-inline: 15px;
+  }
+
+  .form-check-input {
+    position: relative;
+  }
+
+  .form-check-input::after {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 44px;
+    height: 44px;
+    content: &quot;&quot;;
+    transform: translate(-50%, -50%);
+  }
+
+  .form-check-label {
+    display: inline-flex;
+    min-width: 44px;
+    min-height: 44px;
+    align-items: center;
+  }
+
+  .form-range {
+    height: 44px;
+    touch-action: pan-y;
+  }
+
+  .form-range::-webkit-slider-runnable-track {
+    height: 44px;
+  }
+
+  .form-range::-moz-range-track {
+    height: 44px;
+  }
+
+  .form-range::-webkit-slider-thumb {
+    margin-top: 12px;
+  }
+}
+
+svg {
+  display: block;
+  max-width: 100%;
+  height: auto;
+}
+
+#widget &gt; svg {
+  width: 100%;
+}
+
+/* Model-authored chart rules can otherwise stretch icons after these styles load. */
+svg.lucide {
+  display: block;
+  width: var(--icon-size) !important;
+  height: var(--icon-size) !important;
+  flex: none;
+  margin: 0 !important;
+  stroke-width: 1.6;
+}
+
+.text-warning,
+.text-destructive {
+  color: var(--destructive);
+}
+
+html&gt;body{padding:0}&lt;/style&gt;
+&lt;/head&gt;
+&lt;body&gt;
+&lt;style&gt;
+#ugs-code {
+ --uc-bg:light-dark(#f5f6f8,#15181b);--uc-side:light-dark(#eceff2,#1a1e22);--uc-panel:light-dark(#ffffff,#20252a);--uc-well:light-dark(#f1f3f5,#14181c);
+ --uc-fg:light-dark(#222b32,#edf1f4);--uc-muted:light-dark(#596772,#a5b1bc);--uc-line:light-dark(#d9dfe5,#343c44);--uc-green:light-dark(#197248,#79dca5);--uc-button:light-dark(#19794d,#79dca5);--uc-button-fg:light-dark(#ffffff,#122a1e);--uc-tint:light-dark(#e0eee6,#253c30);--uc-amber:light-dark(#85520d,#e8be79);--uc-amber-bg:light-dark(#fbefd9,#3a3020);--uc-red:light-dark(#b02e3d,#ff9ea8);--uc-red-bg:light-dark(#fae8eb,#3b252a);--uc-blue:light-dark(#2869b8,#98bef5);--uc-side-width:228px;
+ color:var(--uc-fg);background:var(--uc-bg);border:1px solid var(--uc-line);border-radius:9px;position:relative;width:100%;font:14px/1.5 &#x27;Segoe UI&#x27;,&#x27;Microsoft YaHei&#x27;,sans-serif;isolation:isolate;
+}
+#ugs-code *{box-sizing:border-box}
+#ugs-code [hidden]{display:none!important}
+#ugs-code button,#ugs-code input,#ugs-code select{font:inherit}
+#ugs-code button{cursor:pointer;color:inherit}
+#ugs-code button:disabled{opacity:.45;cursor:default}
+#ugs-code h1,#ugs-code h2,#ugs-code h3,#ugs-code p{margin:0}
+#ugs-code h1{font-size:22px;font-weight:500;letter-spacing:-.5px;line-height:1.3;overflow-wrap:anywhere}
+#ugs-code h2{font-size:17px;font-weight:500;line-height:1.4}
+#ugs-code h3{font-size:14px;font-weight:500}
+#ugs-code .uc-icon{width:16px;height:16px;flex:0 0 auto}
+#ugs-code .uc-row{display:flex;align-items:center;gap:9px;flex-wrap:wrap}
+#ugs-code .uc-between{justify-content:space-between}
+#ugs-code .uc-muted{color:var(--uc-muted)}
+#ugs-code .uc-small{font-size:12px}
+#ugs-code .uc-mono{font-family:Consolas,&#x27;Courier New&#x27;,monospace;font-size:12px;overflow-wrap:anywhere;font-variant-numeric:tabular-nums}
+#ugs-code .uc-titlebar{min-height:34px;padding:7px 14px;border-bottom:1px solid var(--uc-line);background:var(--uc-side);border-radius:8px 8px 0 0;font-size:11px}
+#ugs-code .uc-preview-badge{color:var(--uc-muted);font-size:11px}
+#ugs-code .uc-chrome{display:flex;gap:22px;color:var(--uc-muted);margin-left:auto}
+#ugs-code .uc-shell{display:grid;grid-template-columns:min(var(--uc-side-width),40%) minmax(0,1fr);min-height:586px}
+#ugs-code .uc-sidebar{background:var(--uc-side);border-right:1px solid var(--uc-line);border-radius:0 0 0 8px;display:flex;flex-direction:column;min-width:0;padding:18px 12px 13px}
+#ugs-code .uc-brand{padding:0 9px 18px;display:flex;align-items:center;gap:10px}
+#ugs-code .uc-logo{width:31px;height:31px;background:var(--uc-tint);color:var(--uc-green);border-radius:8px;display:grid;place-items:center}
+#ugs-code .uc-brand-name{font-size:16px;font-weight:500;letter-spacing:-.3px}
+#ugs-code .uc-brand-caption{color:var(--uc-muted);font-size:11px;margin-top:2px}
+#ugs-code .uc-side-heading{padding:5px 8px 10px;display:flex;align-items:center;justify-content:space-between;gap:5px;font-size:12px;color:var(--uc-muted)}
+#ugs-code .uc-icon-button{background:transparent;border:0;border-radius:4px;padding:5px;display:inline-flex;align-items:center;justify-content:center;flex-shrink:0}
+#ugs-code .uc-icon-button:hover{background:var(--uc-well)}
+#ugs-code .uc-workspace{border:1px solid transparent;border-left:3px solid var(--uc-green);border-radius:6px;background:var(--uc-tint);padding:12px 11px}
+#ugs-code .uc-workspace-name{font-size:13px;font-weight:500;overflow-wrap:anywhere;margin:8px 0 6px}
+#ugs-code .uc-workspace-path{font-size:11px;color:var(--uc-muted);overflow:hidden;white-space:nowrap;text-overflow:ellipsis;margin-top:5px}
+#ugs-code .uc-workspace-tools{display:flex;justify-content:space-between;align-items:center}
+#ugs-code .uc-workspace-tools .uc-icon-button{padding:2px}
+#ugs-code .uc-side-footer{margin-top:auto;border-top:1px solid var(--uc-line);padding:12px 6px 0}
+#ugs-code .uc-dot{width:6px;height:6px;border-radius:50%;background:var(--uc-green);display:inline-block;flex-shrink:0}
+#ugs-code .uc-text-button{border:0;background:transparent;padding:3px 0;font-size:12px;color:var(--uc-muted)}
+#ugs-code .uc-main{min-width:0;padding:22px 24px 18px}
+#ugs-code .uc-heading-top{margin-bottom:6px;font-size:11px;color:var(--uc-muted)}
+#ugs-code .uc-root-path{margin-top:6px;color:var(--uc-muted)}
+#ugs-code details&gt;summary{cursor:pointer;color:var(--uc-muted);font-size:12px;width:fit-content}
+#ugs-code .uc-meta-details{margin-top:8px}
+#ugs-code .uc-meta-grid{display:grid;grid-template-columns:72px minmax(0,1fr);gap:5px 10px;margin:8px 0 4px;font-size:12px}
+#ugs-code .uc-tabs{display:flex;gap:25px;border-bottom:1px solid var(--uc-line);margin:15px 0 18px}
+#ugs-code .uc-tab{border:0;border-bottom:2px solid transparent;background:transparent;color:var(--uc-muted);padding:0 1px 10px;display:flex;align-items:center;gap:7px;font-size:13px}
+#ugs-code .uc-tab[aria-selected=&#x27;true&#x27;]{border-bottom-color:var(--uc-green);color:var(--uc-fg)}
+#ugs-code .uc-card{background:var(--uc-panel);border:1px solid var(--uc-line);border-radius:8px}
+#ugs-code .uc-card-body{padding:17px 19px}
+#ugs-code .uc-card-footer{padding:12px 19px;border-top:1px solid var(--uc-line)}
+#ugs-code .uc-chip{display:inline-flex;align-items:center;gap:5px;font-size:11px;line-height:1.5;border:1px solid var(--uc-line);border-radius:4px;padding:1px 6px;color:var(--uc-muted);white-space:nowrap}
+#ugs-code .uc-amber{color:var(--uc-amber)}
+#ugs-code .uc-red{color:var(--uc-red)}
+#ugs-code .uc-green{color:var(--uc-green)}
+#ugs-code .uc-blue{color:var(--uc-blue)}
+#ugs-code .uc-pending{color:var(--uc-amber);background:var(--uc-amber-bg);border-radius:5px;padding:5px 9px;font-size:12px;display:inline-flex;align-items:center;gap:7px}
+#ugs-code .uc-card-subtitle{font-size:12px;color:var(--uc-muted);margin-top:4px}
+#ugs-code .uc-target-grid{margin-top:18px;display:grid;grid-template-columns:minmax(140px,1fr) minmax(160px,1fr);gap:15px;align-items:end}
+#ugs-code .uc-label{display:block;font-size:12px;margin-bottom:6px;color:var(--uc-muted)}
+#ugs-code .uc-input,#ugs-code .uc-select{width:100%;min-width:0;border:1px solid var(--uc-line);border-radius:5px;background:var(--uc-well);color:var(--uc-fg);padding:8px 10px;font-size:13px}
+#ugs-code input::placeholder{color:var(--uc-muted)}
+#ugs-code input[type=checkbox]{accent-color:var(--uc-button);width:15px;height:15px;margin:0;flex-shrink:0}
+#ugs-code .uc-target-hint{font-size:12px;color:var(--uc-muted);padding-bottom:8px}
+#ugs-code .uc-check-label{display:flex;align-items:center;gap:8px;font-size:12px}
+#ugs-code .uc-engine-option{margin-top:12px;padding-top:11px;border-top:1px solid var(--uc-line)}
+#ugs-code .uc-hint{margin-top:5px;color:var(--uc-muted);font-size:12px}
+#ugs-code .uc-button{border:1px solid var(--uc-line);border-radius:5px;background:var(--uc-panel);padding:8px 13px;display:inline-flex;align-items:center;justify-content:center;gap:7px;font-size:12px;white-space:nowrap}
+#ugs-code .uc-button:hover{filter:brightness(1.09)}
+#ugs-code .uc-primary{background:var(--uc-button);border-color:transparent;color:var(--uc-button-fg);font-weight:500;min-width:123px}
+#ugs-code .uc-danger{color:var(--uc-red);background:var(--uc-red-bg)}
+#ugs-code .uc-engine-row{margin-top:12px;border:1px solid var(--uc-line);border-radius:7px;padding:14px 18px}
+#ugs-code .uc-engine-meta{font-size:12px;margin-top:6px}
+#ugs-code .uc-pipeline-hint{margin-top:14px;font-size:11px;color:var(--uc-muted)}
+#ugs-code .uc-pipeline-inline{font-size:12px;margin-top:8px;display:flex;gap:7px 10px;flex-wrap:wrap;color:var(--uc-muted)}
+#ugs-code .uc-last-result{margin-top:12px;border:1px solid var(--uc-line);border-radius:7px;padding:13px 16px}
+#ugs-code .uc-warning-list{border-top:1px solid var(--uc-line);margin-top:10px;padding-top:10px;font-size:12px}
+#ugs-code .uc-warning-list summary{color:var(--uc-amber);font-size:12px}
+#ugs-code .uc-warning-path{padding:7px 0;overflow-wrap:anywhere}
+#ugs-code .uc-section-head{margin-bottom:18px}
+#ugs-code .uc-section-head p{margin-top:5px;color:var(--uc-muted);font-size:12px}
+#ugs-code .uc-run-layout{display:grid;grid-template-columns:140px minmax(0,1fr);gap:20px}
+#ugs-code .uc-steps{list-style:none;padding:2px 0;margin:0;display:flex;flex-direction:column;gap:17px}
+#ugs-code .uc-step{display:flex;gap:10px;font-size:12px;color:var(--uc-muted);align-items:center}
+#ugs-code .uc-step-index{height:23px;width:23px;border:1px solid var(--uc-line);border-radius:50%;display:grid;place-items:center;font-size:11px;flex-shrink:0}
+#ugs-code .uc-step-done .uc-step-index{border-color:transparent;background:var(--uc-tint);color:var(--uc-green)}
+#ugs-code .uc-step-active{color:var(--uc-fg)}
+#ugs-code .uc-step-active .uc-step-index{background:var(--uc-button);color:var(--uc-button-fg);border-color:transparent}
+#ugs-code .uc-run-card{padding:17px 18px;min-width:0}
+#ugs-code .uc-progress-number{font-size:25px;font-weight:500;letter-spacing:-.6px;font-variant-numeric:tabular-nums;margin:15px 0 9px}
+#ugs-code .uc-progress-track{height:5px;background:var(--uc-well);border-radius:4px}
+#ugs-code .uc-progress-fill{height:100%;width:34%;background:var(--uc-green);border-radius:4px}
+#ugs-code .uc-progress-detail{display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;font-size:12px;color:var(--uc-muted);margin-top:9px}
+#ugs-code .uc-current-file{margin-top:12px;padding-top:12px;border-top:1px solid var(--uc-line);font-size:11px;color:var(--uc-muted);overflow-wrap:anywhere}
+#ugs-code .uc-log{margin-top:12px;background:var(--uc-well);border:1px solid var(--uc-line);border-radius:6px}
+#ugs-code .uc-log-title{padding:8px 11px;border-bottom:1px solid var(--uc-line);font-size:11px;color:var(--uc-muted)}
+#ugs-code .uc-log pre{margin:0;padding:11px;font:11px/1.6 Consolas,monospace;white-space:pre-wrap;overflow-wrap:anywhere;color:var(--uc-muted)}
+#ugs-code .uc-error-panel{padding:22px;border:1px solid var(--uc-line);border-top:3px solid var(--uc-red);border-radius:7px;background:var(--uc-panel)}
+#ugs-code .uc-error-text{padding:14px;margin:17px 0;background:var(--uc-well);border-radius:5px;font:12px/1.7 Consolas,monospace;overflow-wrap:anywhere}
+#ugs-code .uc-table{border-collapse:collapse;width:100%;font-size:12px;text-align:left}
+#ugs-code .uc-table th{font-weight:400;color:var(--uc-muted);padding:9px 8px;border-bottom:1px solid var(--uc-line);font-size:11px}
+#ugs-code .uc-table td{padding:15px 8px;border-bottom:1px solid var(--uc-line)}
+#ugs-code .uc-table th:first-child,#ugs-code .uc-table td:first-child{padding-left:0}
+#ugs-code .uc-table .uc-number{text-align:right;font-variant-numeric:tabular-nums}
+#ugs-code .uc-health-empty{padding:48px 15px;text-align:center;color:var(--uc-muted);font-size:13px;border-top:1px solid var(--uc-line)}
+#ugs-code .uc-health-group{border-bottom:1px solid var(--uc-line);padding:12px 0}
+#ugs-code .uc-health-group summary{color:var(--uc-fg);width:100%;font-size:13px}
+#ugs-code .uc-health-count{float:right;color:var(--uc-muted);font-variant-numeric:tabular-nums}
+#ugs-code .uc-health-path{margin:9px 0 0 18px;color:var(--uc-muted);font:12px/1.7 Consolas,monospace;overflow-wrap:anywhere}
+#ugs-code .uc-readonly{margin-top:14px;color:var(--uc-muted);font-size:11px}
+#ugs-code .uc-modal-layer{position:absolute;inset:0;z-index:20;background:light-dark(#111c2b55,#00000088);border-radius:8px;display:grid;align-content:start;justify-items:center;padding:28px 12px;min-height:100%}
+#ugs-code .uc-dialog{width:min(540px,100%);background:var(--uc-panel);border:1px solid var(--uc-line);border-radius:9px;box-shadow:0 18px 65px light-dark(#15243226,#00000066);padding:21px;position:relative}
+#ugs-code .uc-dialog-wide{width:min(620px,100%)}
+#ugs-code .uc-dialog-head{display:flex;align-items:start;justify-content:space-between;gap:12px;margin-bottom:15px}
+#ugs-code .uc-dialog-head p{font-size:12px;color:var(--uc-muted);margin-top:5px}
+#ugs-code .uc-dialog-foot{display:flex;justify-content:flex-end;gap:9px;flex-wrap:wrap;margin-top:20px;padding-top:16px;border-top:1px solid var(--uc-line)}
+#ugs-code .uc-fields{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+#ugs-code .uc-full{grid-column:1/-1}
+#ugs-code .uc-field-heading{font-size:12px;color:var(--uc-muted);padding-top:5px;border-top:1px solid var(--uc-line)}
+#ugs-code .uc-settings-tabs{display:flex;gap:7px;margin:0 0 19px}
+#ugs-code .uc-settings-tab{padding:7px 12px;border:1px solid var(--uc-line);border-radius:5px;background:transparent;color:var(--uc-muted);font-size:12px}
+#ugs-code .uc-settings-tab[aria-pressed=true]{color:var(--uc-fg);background:var(--uc-well)}
+#ugs-code .uc-exclusion{display:flex;align-items:center;justify-content:space-between;gap:9px;padding:7px 10px;border-bottom:1px solid var(--uc-line);background:var(--uc-well);font:12px Consolas,monospace}
+#ugs-code .uc-app-setting{padding:12px 0;border-bottom:1px solid var(--uc-line)}
+#ugs-code .uc-app-setting:first-child{padding-top:0}
+#ugs-code .uc-app-setting:last-child{border-bottom:0}
+#ugs-code .uc-cl-choice{display:block;width:100%;text-align:left;padding:12px;border:1px solid var(--uc-line);border-radius:6px;background:var(--uc-well);margin-top:8px;font-size:12px}
+#ugs-code .uc-cl-choice[aria-pressed=true]{border-color:var(--uc-green);background:var(--uc-tint)}
+#ugs-code .uc-cl-description{margin-top:5px;color:var(--uc-muted);font-size:12px}
+#ugs-code .uc-caution{background:var(--uc-amber-bg);color:var(--uc-amber);padding:13px;border-radius:6px;font-size:12px;line-height:1.8;margin-top:15px}
+#ugs-code .uc-toast{position:absolute;bottom:12px;right:12px;left:12px;z-index:30;max-width:600px;margin:auto;padding:10px 14px;color:var(--uc-fg);background:var(--uc-panel);border:1px solid var(--uc-line);border-radius:6px;font-size:12px;box-shadow:0 6px 24px light-dark(#00000022,#00000066)}
+#ugs-code[data-density=compact] .uc-main{padding:17px 20px 15px}
+#ugs-code[data-density=compact] .uc-card-body{padding:14px 16px}
+#ugs-code[data-density=compact] .uc-shell{min-height:554px}
+#ugs-code[data-density=compact] .uc-engine-row{padding:11px 16px}
+@media(max-width:850px){#ugs-code .uc-main{padding:20px 18px}#ugs-code h1{font-size:20px}#ugs-code .uc-run-layout{grid-template-columns:1fr}#ugs-code .uc-steps{flex-direction:row;gap:10px;flex-wrap:wrap}#ugs-code .uc-step{gap:6px}#ugs-code .uc-target-grid{grid-template-columns:1fr}#ugs-code .uc-target-hint{padding:0}#ugs-code .uc-card-body{padding:16px}#ugs-code .uc-card-footer{padding:12px 16px}}
+@media(max-width:620px){#ugs-code .uc-shell{display:block;min-height:0}#ugs-code .uc-sidebar{border-right:0;border-bottom:1px solid var(--uc-line);padding:12px 14px;border-radius:0}#ugs-code .uc-brand,#ugs-code .uc-side-heading,#ugs-code .uc-side-footer,#ugs-code .uc-workspace-path{display:none}#ugs-code .uc-workspace{padding:8px 10px;display:flex;gap:10px;align-items:center;flex-wrap:wrap}#ugs-code .uc-workspace-name{margin:0;flex:1}#ugs-code .uc-workspace-tools{display:none}#ugs-code .uc-main,#ugs-code[data-density=compact] .uc-main{padding:20px 14px}#ugs-code .uc-titlebar{gap:7px}#ugs-code .uc-chrome{display:none}#ugs-code .uc-preview-badge{margin-left:auto}#ugs-code .uc-card-footer&gt;.uc-primary{width:100%}#ugs-code .uc-fields{grid-template-columns:1fr}#ugs-code .uc-dialog{padding:17px}#ugs-code .uc-table th,#ugs-code .uc-table td{padding:11px 4px}#ugs-code .uc-table .uc-time{max-width:100px;overflow-wrap:anywhere}#ugs-code .uc-pending{margin-top:3px}#ugs-code .uc-dialog-foot .uc-primary{min-width:0}#ugs-code .uc-dialog-foot{gap:6px}#ugs-code .uc-run-card{padding:15px}}
+@media(max-width:620px){#ugs-code .uc-side-heading{display:flex;padding:0 1px 7px}#ugs-code .uc-side-footer{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;margin-top:10px;border:0;padding:0}#ugs-code .uc-side-footer&gt;div{margin-top:0!important}#ugs-code .uc-workspace-tools{display:flex;gap:9px}}
+@media(pointer:coarse){#ugs-code button{min-height:44px}#ugs-code input,#ugs-code select{font-size:16px}#ugs-code summary{padding:6px 0}}
+&lt;/style&gt;
+&lt;div id=&quot;ugs-code&quot; aria-label=&quot;Simple UGS 1.7 界面方案&quot; data-density=&quot;comfortable&quot;&gt;
+ &lt;div class=&quot;uc-titlebar uc-row&quot;&gt;&lt;i class=&quot;uc-icon uc-green&quot; data-lucide=&quot;refresh-cw&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;&lt;span&gt;Simple UnrealGameSync&lt;/span&gt;&lt;span class=&quot;uc-preview-badge&quot;&gt;设计预览 · 示例数据&lt;/span&gt;&lt;div class=&quot;uc-chrome&quot; aria-hidden=&quot;true&quot;&gt;&lt;span&gt;−&lt;/span&gt;&lt;span&gt;□&lt;/span&gt;&lt;span&gt;×&lt;/span&gt;&lt;/div&gt;&lt;/div&gt;
+ &lt;div class=&quot;uc-shell&quot;&gt;
+  &lt;aside class=&quot;uc-sidebar&quot; aria-label=&quot;工作区导航&quot;&gt;
+   &lt;div class=&quot;uc-brand&quot;&gt;&lt;div class=&quot;uc-logo&quot;&gt;&lt;i class=&quot;uc-icon&quot; data-lucide=&quot;layers&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;&lt;/div&gt;&lt;div&gt;&lt;div class=&quot;uc-brand-name&quot;&gt;Simple UGS&lt;/div&gt;&lt;div class=&quot;uc-brand-caption&quot;&gt;Unreal 工作区同步&lt;/div&gt;&lt;/div&gt;&lt;/div&gt;
+   &lt;div class=&quot;uc-side-heading&quot;&gt;&lt;span&gt;工作区&lt;/span&gt;&lt;button class=&quot;uc-icon-button&quot; id=&quot;uc-add-workspace&quot; aria-label=&quot;添加工作区&quot;&gt;&lt;i class=&quot;uc-icon&quot; data-lucide=&quot;plus&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;&lt;/button&gt;&lt;/div&gt;
+   &lt;div class=&quot;uc-workspace&quot; aria-current=&quot;page&quot;&gt;&lt;div class=&quot;uc-workspace-tools&quot;&gt;&lt;i class=&quot;uc-icon&quot; data-lucide=&quot;folder-open&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;&lt;button class=&quot;uc-icon-button&quot; id=&quot;uc-delete-workspace&quot; aria-label=&quot;删除工作区&quot;&gt;&lt;i class=&quot;uc-icon&quot; data-lucide=&quot;trash-2&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;&lt;/button&gt;&lt;/div&gt;&lt;div class=&quot;uc-workspace-name&quot;&gt;Demo_Stream_&lt;wbr&gt;Alice&lt;/div&gt;&lt;div class=&quot;uc-small uc-row&quot;&gt;&lt;span class=&quot;uc-dot&quot;&gt;&lt;/span&gt;&lt;span class=&quot;uc-mono&quot;&gt;CL 381515&lt;/span&gt;&lt;/div&gt;&lt;div class=&quot;uc-workspace-path&quot;&gt;D:\DemoDepot\Demo_Stream_Alice&lt;/div&gt;&lt;/div&gt;
+   &lt;div class=&quot;uc-side-footer&quot;&gt;&lt;button class=&quot;uc-text-button uc-row&quot; id=&quot;uc-open-settings&quot;&gt;&lt;i class=&quot;uc-icon&quot; data-lucide=&quot;settings-2&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;&lt;span&gt;设置&lt;/span&gt;&lt;/button&gt;&lt;div class=&quot;uc-row uc-small uc-muted&quot; style=&quot;margin-top:14px&quot;&gt;&lt;span class=&quot;uc-dot&quot;&gt;&lt;/span&gt;Perforce 就绪&lt;/div&gt;&lt;div class=&quot;uc-row uc-between&quot; style=&quot;margin-top:8px&quot;&gt;&lt;button class=&quot;uc-text-button&quot; id=&quot;uc-version&quot;&gt;v1.7.0&lt;/button&gt;&lt;button class=&quot;uc-icon-button uc-muted&quot; id=&quot;uc-check-update&quot; aria-label=&quot;检查更新&quot;&gt;&lt;i class=&quot;uc-icon&quot; data-lucide=&quot;refresh-cw&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;&lt;/button&gt;&lt;/div&gt;&lt;/div&gt;
+  &lt;/aside&gt;
+  &lt;main class=&quot;uc-main&quot;&gt;
+   &lt;header&gt;&lt;div class=&quot;uc-heading-top&quot;&gt;当前工作区&lt;/div&gt;&lt;h1&gt;Demo_Stream_Alice&lt;/h1&gt;&lt;p class=&quot;uc-root-path uc-mono&quot;&gt;D:\DemoDepot\Demo_Stream_Alice&lt;/p&gt;&lt;details class=&quot;uc-meta-details&quot;&gt;&lt;summary&gt;查看 Stream 与 P4 Client&lt;/summary&gt;&lt;div class=&quot;uc-meta-grid&quot;&gt;&lt;span class=&quot;uc-muted&quot;&gt;Stream&lt;/span&gt;&lt;span class=&quot;uc-mono&quot;&gt;//DemoDepot/DemoStream&lt;/span&gt;&lt;span class=&quot;uc-muted&quot;&gt;P4 Client&lt;/span&gt;&lt;span class=&quot;uc-mono&quot;&gt;Demo_Stream_Alice&lt;/span&gt;&lt;/div&gt;&lt;/details&gt;&lt;/header&gt;
+   &lt;nav class=&quot;uc-tabs&quot; role=&quot;tablist&quot; aria-label=&quot;工作区页面&quot;&gt;&lt;button class=&quot;uc-tab&quot; id=&quot;uc-tab-sync&quot; role=&quot;tab&quot; aria-selected=&quot;true&quot; aria-controls=&quot;uc-page-sync&quot;&gt;&lt;i class=&quot;uc-icon&quot; data-lucide=&quot;arrow-down-to-line&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;同步&lt;/button&gt;&lt;button class=&quot;uc-tab&quot; id=&quot;uc-tab-history&quot; role=&quot;tab&quot; aria-selected=&quot;false&quot; aria-controls=&quot;uc-page-history&quot;&gt;&lt;i class=&quot;uc-icon&quot; data-lucide=&quot;history&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;历史&lt;/button&gt;&lt;button class=&quot;uc-tab&quot; id=&quot;uc-tab-health&quot; role=&quot;tab&quot; aria-selected=&quot;false&quot; aria-controls=&quot;uc-page-health&quot;&gt;&lt;i class=&quot;uc-icon&quot; data-lucide=&quot;shield-check&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;健康&lt;/button&gt;&lt;/nav&gt;
+   &lt;section id=&quot;uc-page-sync&quot; role=&quot;tabpanel&quot; aria-labelledby=&quot;uc-tab-sync&quot;&gt;
+    &lt;div id=&quot;uc-idle-view&quot;&gt;
+     &lt;section class=&quot;uc-card&quot; aria-label=&quot;Perforce 项目同步&quot;&gt;&lt;div class=&quot;uc-card-body&quot;&gt;&lt;div class=&quot;uc-row uc-between&quot;&gt;&lt;div&gt;&lt;div class=&quot;uc-row&quot;&gt;&lt;h2&gt;Perforce 项目&lt;/h2&gt;&lt;span class=&quot;uc-chip&quot;&gt;P4&lt;/span&gt;&lt;/div&gt;&lt;p class=&quot;uc-card-subtitle&quot;&gt;同步项目内容并生成项目文件&lt;/p&gt;&lt;/div&gt;&lt;span class=&quot;uc-pending&quot; id=&quot;uc-behind-badge&quot;&gt;&lt;i class=&quot;uc-icon&quot; data-lucide=&quot;arrow-down-to-line&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;&lt;span&gt;8,520 个文件待同步&lt;/span&gt;&lt;/span&gt;&lt;/div&gt;&lt;div class=&quot;uc-target-grid&quot;&gt;&lt;div&gt;&lt;label class=&quot;uc-label&quot; for=&quot;uc-target-cl&quot;&gt;目标 CL &lt;span class=&quot;uc-muted&quot;&gt;· 可选&lt;/span&gt;&lt;/label&gt;&lt;input class=&quot;uc-input uc-mono&quot; id=&quot;uc-target-cl&quot; type=&quot;text&quot; inputmode=&quot;numeric&quot; placeholder=&quot;留空即 HEAD&quot; aria-describedby=&quot;uc-cl-error&quot;&gt;&lt;p class=&quot;uc-small uc-red&quot; id=&quot;uc-cl-error&quot; role=&quot;alert&quot; hidden&gt;CL 必须是数字&lt;/p&gt;&lt;/div&gt;&lt;div class=&quot;uc-target-hint&quot; id=&quot;uc-target-hint&quot;&gt;留空将同步到最新版本&lt;/div&gt;&lt;/div&gt;&lt;div class=&quot;uc-engine-option&quot; id=&quot;uc-engine-option&quot; hidden&gt;&lt;label class=&quot;uc-check-label&quot;&gt;&lt;input type=&quot;checkbox&quot; id=&quot;uc-sync-engine&quot;&gt;&lt;span&gt;同步 UnrealEngine 源码&lt;/span&gt;&lt;/label&gt;&lt;p class=&quot;uc-hint&quot; id=&quot;uc-engine-hint&quot;&gt;仅同步项目（引擎通过 Git Pull）&lt;/p&gt;&lt;/div&gt;&lt;/div&gt;&lt;div class=&quot;uc-card-footer uc-row uc-between&quot;&gt;&lt;span class=&quot;uc-small uc-muted&quot;&gt;当前版本 &lt;span class=&quot;uc-mono&quot;&gt;CL 381515&lt;/span&gt;&lt;/span&gt;&lt;button class=&quot;uc-button uc-primary&quot; id=&quot;uc-start-sync&quot;&gt;&lt;i class=&quot;uc-icon&quot; data-lucide=&quot;play&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;&lt;span&gt;开始同步&lt;/span&gt;&lt;/button&gt;&lt;/div&gt;&lt;/section&gt;
+     &lt;section class=&quot;uc-engine-row&quot; aria-label=&quot;UnrealEngine Git 仓库&quot;&gt;&lt;div class=&quot;uc-row uc-between&quot;&gt;&lt;div&gt;&lt;div class=&quot;uc-row&quot;&gt;&lt;h3&gt;UnrealEngine 仓库&lt;/h3&gt;&lt;span class=&quot;uc-chip&quot;&gt;Git&lt;/span&gt;&lt;/div&gt;&lt;div class=&quot;uc-engine-meta uc-row&quot;&gt;&lt;span class=&quot;uc-mono uc-row&quot;&gt;&lt;i class=&quot;uc-icon&quot; data-lucide=&quot;git-branch&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;UE5.7.1&lt;/span&gt;&lt;span class=&quot;uc-amber&quot;&gt;落后 3 个提交&lt;/span&gt;&lt;/div&gt;&lt;/div&gt;&lt;button class=&quot;uc-button&quot; id=&quot;uc-start-git&quot;&gt;&lt;i class=&quot;uc-icon&quot; data-lucide=&quot;git-pull-request&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;拉取 UnrealEngine&lt;/button&gt;&lt;/div&gt;&lt;details class=&quot;uc-meta-details&quot;&gt;&lt;summary&gt;仓库详情&lt;/summary&gt;&lt;div class=&quot;uc-meta-grid&quot;&gt;&lt;span class=&quot;uc-muted&quot;&gt;Remote&lt;/span&gt;&lt;span class=&quot;uc-mono&quot;&gt;origin&lt;/span&gt;&lt;span class=&quot;uc-muted&quot;&gt;Commit&lt;/span&gt;&lt;span class=&quot;uc-mono&quot;&gt;99ba6d897051&lt;/span&gt;&lt;span class=&quot;uc-muted&quot;&gt;更新方式&lt;/span&gt;&lt;span&gt;Fast-forward&lt;/span&gt;&lt;/div&gt;&lt;/details&gt;&lt;/section&gt;
+     &lt;details class=&quot;uc-pipeline-hint&quot;&gt;&lt;summary&gt;项目同步的 5 个步骤&lt;/summary&gt;&lt;div class=&quot;uc-pipeline-inline&quot;&gt;&lt;span&gt;关闭 UE 编辑器&lt;/span&gt;&lt;span&gt;→&lt;/span&gt;&lt;span&gt;关闭 Excel&lt;/span&gt;&lt;span&gt;→&lt;/span&gt;&lt;span&gt;清理 Dev 目录&lt;/span&gt;&lt;span&gt;→&lt;/span&gt;&lt;span&gt;同步文件&lt;/span&gt;&lt;span&gt;→&lt;/span&gt;&lt;span&gt;生成项目文件&lt;/span&gt;&lt;/div&gt;&lt;/details&gt;
+     &lt;section class=&quot;uc-last-result&quot; id=&quot;uc-last-result&quot; hidden&gt;&lt;div class=&quot;uc-row uc-between&quot;&gt;&lt;div class=&quot;uc-row&quot;&gt;&lt;i class=&quot;uc-icon uc-green&quot; data-lucide=&quot;circle-check&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;&lt;h3 id=&quot;uc-result-title&quot;&gt;最近项目同步&lt;/h3&gt;&lt;/div&gt;&lt;span class=&quot;uc-small uc-muted&quot; id=&quot;uc-result-time&quot;&gt;09-08 10:42&lt;/span&gt;&lt;/div&gt;&lt;p class=&quot;uc-hint&quot; id=&quot;uc-result-description&quot;&gt;CL #381515 · 8,520 个文件&lt;/p&gt;&lt;details class=&quot;uc-warning-list&quot; id=&quot;uc-warning-summary&quot; open&gt;&lt;summary&gt;同步完成 · 1 条 warning&lt;/summary&gt;&lt;p class=&quot;uc-warning-path uc-mono&quot;&gt;//DemoDepot/Project/Content/Example.uasset&lt;/p&gt;&lt;/details&gt;&lt;/section&gt;
+    &lt;/div&gt;
+    &lt;div id=&quot;uc-running-view&quot; hidden&gt;&lt;div class=&quot;uc-section-head uc-row uc-between&quot;&gt;&lt;div&gt;&lt;h2 id=&quot;uc-running-title&quot;&gt;正在同步项目&lt;/h2&gt;&lt;p id=&quot;uc-running-target&quot;&gt;同步至最新版本 · HEAD&lt;/p&gt;&lt;/div&gt;&lt;button class=&quot;uc-button&quot; id=&quot;uc-cancel-sync&quot;&gt;&lt;i class=&quot;uc-icon&quot; data-lucide=&quot;square&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;&lt;span id=&quot;uc-cancel-text&quot;&gt;取消同步&lt;/span&gt;&lt;/button&gt;&lt;/div&gt;&lt;div class=&quot;uc-run-layout&quot;&gt;&lt;ol class=&quot;uc-steps&quot; aria-label=&quot;项目同步步骤&quot;&gt;&lt;li class=&quot;uc-step uc-step-done&quot;&gt;&lt;span class=&quot;uc-step-index&quot;&gt;✓&lt;/span&gt;关闭 UE 编辑器&lt;/li&gt;&lt;li class=&quot;uc-step uc-step-done&quot;&gt;&lt;span class=&quot;uc-step-index&quot;&gt;✓&lt;/span&gt;关闭 Excel&lt;/li&gt;&lt;li class=&quot;uc-step uc-step-done&quot;&gt;&lt;span class=&quot;uc-step-index&quot;&gt;✓&lt;/span&gt;清理 Dev 目录&lt;/li&gt;&lt;li class=&quot;uc-step uc-step-active&quot;&gt;&lt;span class=&quot;uc-step-index&quot;&gt;4&lt;/span&gt;&lt;span id=&quot;uc-active-step&quot;&gt;同步文件&lt;/span&gt;&lt;/li&gt;&lt;li class=&quot;uc-step&quot;&gt;&lt;span class=&quot;uc-step-index&quot;&gt;5&lt;/span&gt;生成项目文件&lt;/li&gt;&lt;/ol&gt;&lt;div class=&quot;uc-card uc-run-card&quot;&gt;&lt;div class=&quot;uc-row uc-between&quot;&gt;&lt;h3 id=&quot;uc-progress-title&quot;&gt;正在更新项目文件&lt;/h3&gt;&lt;span class=&quot;uc-chip&quot;&gt;P4&lt;/span&gt;&lt;/div&gt;&lt;div class=&quot;uc-progress-number&quot;&gt;34&lt;span class=&quot;uc-small&quot;&gt;%&lt;/span&gt;&lt;/div&gt;&lt;div class=&quot;uc-progress-track&quot; role=&quot;progressbar&quot; aria-label=&quot;文件同步进度示例&quot; aria-valuenow=&quot;34&quot; aria-valuemin=&quot;0&quot; aria-valuemax=&quot;100&quot;&gt;&lt;div class=&quot;uc-progress-fill&quot;&gt;&lt;/div&gt;&lt;/div&gt;&lt;div class=&quot;uc-progress-detail&quot;&gt;&lt;span&gt;2,897 / 8,520 个文件&lt;/span&gt;&lt;span&gt;文件进度&lt;/span&gt;&lt;/div&gt;&lt;p class=&quot;uc-current-file uc-mono&quot;&gt;//DemoDepot/Project/Content/Example.uasset&lt;/p&gt;&lt;/div&gt;&lt;/div&gt;&lt;div class=&quot;uc-log&quot;&gt;&lt;div class=&quot;uc-log-title uc-row&quot;&gt;&lt;i class=&quot;uc-icon&quot; data-lucide=&quot;terminal&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;同步输出&lt;/div&gt;&lt;pre&gt;[closeUe] completed
+[closeExcel] completed
+[cleanDevDir] completed
+//DemoDepot/Project/Content/Example.uasset#4 - updating&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;
+    &lt;div id=&quot;uc-error-view&quot; hidden&gt;&lt;section class=&quot;uc-error-panel&quot;&gt;&lt;div class=&quot;uc-row&quot;&gt;&lt;i class=&quot;uc-icon uc-red&quot; data-lucide=&quot;circle-alert&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;&lt;h2&gt;同步失败&lt;/h2&gt;&lt;/div&gt;&lt;p class=&quot;uc-hint&quot; id=&quot;uc-error-stage&quot;&gt;同步文件失败&lt;/p&gt;&lt;div class=&quot;uc-error-text&quot; id=&quot;uc-error-raw&quot;&gt;示例：文件被其他进程占用，无法更新。&lt;/div&gt;&lt;div class=&quot;uc-row&quot;&gt;&lt;button class=&quot;uc-button uc-primary&quot; id=&quot;uc-retry-sync&quot;&gt;重试此步骤&lt;/button&gt;&lt;button class=&quot;uc-button&quot; id=&quot;uc-dismiss-error&quot;&gt;关闭错误&lt;/button&gt;&lt;/div&gt;&lt;/section&gt;&lt;/div&gt;
+    &lt;div id=&quot;uc-git-view&quot; hidden&gt;&lt;div class=&quot;uc-section-head uc-row uc-between&quot;&gt;&lt;div&gt;&lt;div class=&quot;uc-row&quot;&gt;&lt;h2 id=&quot;uc-git-heading&quot;&gt;正在拉取 UnrealEngine&lt;/h2&gt;&lt;span class=&quot;uc-chip&quot;&gt;Git&lt;/span&gt;&lt;/div&gt;&lt;p class=&quot;uc-mono&quot;&gt;UE5.7.1 · origin&lt;/p&gt;&lt;/div&gt;&lt;button class=&quot;uc-button&quot; id=&quot;uc-git-action&quot;&gt;取消拉取&lt;/button&gt;&lt;/div&gt;&lt;div class=&quot;uc-card uc-run-card&quot; id=&quot;uc-git-progress&quot;&gt;&lt;h3&gt;Receiving objects&lt;/h3&gt;&lt;div class=&quot;uc-progress-number&quot;&gt;62&lt;span class=&quot;uc-small&quot;&gt;%&lt;/span&gt;&lt;/div&gt;&lt;div class=&quot;uc-progress-track&quot; role=&quot;progressbar&quot; aria-label=&quot;Git 当前阶段进度示例&quot; aria-valuenow=&quot;62&quot; aria-valuemin=&quot;0&quot; aria-valuemax=&quot;100&quot;&gt;&lt;div class=&quot;uc-progress-fill&quot; style=&quot;width:62%&quot;&gt;&lt;/div&gt;&lt;/div&gt;&lt;p class=&quot;uc-hint&quot;&gt;当前阶段进度&lt;/p&gt;&lt;/div&gt;&lt;div class=&quot;uc-error-text&quot; id=&quot;uc-git-error&quot; hidden&gt;示例：无法访问远程仓库，请检查网络连接。&lt;/div&gt;&lt;div class=&quot;uc-log&quot;&gt;&lt;div class=&quot;uc-log-title uc-row&quot;&gt;&lt;i class=&quot;uc-icon&quot; data-lucide=&quot;terminal&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;Git 输出&lt;/div&gt;&lt;pre id=&quot;uc-git-log&quot;&gt;保存本地更改…
+准备下载…
+Receiving objects: 62%&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;
+   &lt;/section&gt;
+   &lt;section id=&quot;uc-page-history&quot; role=&quot;tabpanel&quot; aria-labelledby=&quot;uc-tab-history&quot; hidden&gt;&lt;div class=&quot;uc-section-head uc-row uc-between&quot;&gt;&lt;div&gt;&lt;h2&gt;同步历史&lt;/h2&gt;&lt;p&gt;此工作区已完成的项目同步记录&lt;/p&gt;&lt;/div&gt;&lt;button class=&quot;uc-button&quot; id=&quot;uc-open-rollback&quot;&gt;&lt;i class=&quot;uc-icon&quot; data-lucide=&quot;undo-2&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;回滚历史&lt;/button&gt;&lt;/div&gt;&lt;table class=&quot;uc-table&quot;&gt;&lt;thead&gt;&lt;tr&gt;&lt;th&gt;Changelist&lt;/th&gt;&lt;th&gt;同步时间&lt;/th&gt;&lt;th class=&quot;uc-number&quot;&gt;耗时&lt;/th&gt;&lt;th class=&quot;uc-number&quot;&gt;文件数&lt;/th&gt;&lt;/tr&gt;&lt;/thead&gt;&lt;tbody&gt;&lt;tr&gt;&lt;td class=&quot;uc-mono&quot;&gt;CL 381515&lt;/td&gt;&lt;td class=&quot;uc-time&quot;&gt;2026-09-08 10:42&lt;/td&gt;&lt;td class=&quot;uc-number&quot;&gt;3m 24s&lt;/td&gt;&lt;td class=&quot;uc-number&quot;&gt;8,520&lt;/td&gt;&lt;/tr&gt;&lt;tr&gt;&lt;td class=&quot;uc-mono&quot;&gt;CL 381204&lt;/td&gt;&lt;td class=&quot;uc-time&quot;&gt;2026-09-07 16:20&lt;/td&gt;&lt;td class=&quot;uc-number&quot;&gt;48s&lt;/td&gt;&lt;td class=&quot;uc-number&quot;&gt;236&lt;/td&gt;&lt;/tr&gt;&lt;tr&gt;&lt;td class=&quot;uc-mono&quot;&gt;CL 380998&lt;/td&gt;&lt;td class=&quot;uc-time&quot;&gt;2026-09-07 09:15&lt;/td&gt;&lt;td class=&quot;uc-number&quot;&gt;—&lt;/td&gt;&lt;td class=&quot;uc-number&quot;&gt;1,084&lt;/td&gt;&lt;/tr&gt;&lt;/tbody&gt;&lt;/table&gt;&lt;/section&gt;
+   &lt;section id=&quot;uc-page-health&quot; role=&quot;tabpanel&quot; aria-labelledby=&quot;uc-tab-health&quot; hidden&gt;&lt;div class=&quot;uc-section-head uc-row uc-between&quot;&gt;&lt;div&gt;&lt;h2&gt;工作区健康&lt;/h2&gt;&lt;p&gt;检查本地文件与 Perforce 的状态&lt;/p&gt;&lt;/div&gt;&lt;button class=&quot;uc-button&quot; id=&quot;uc-audit&quot;&gt;&lt;i class=&quot;uc-icon&quot; data-lucide=&quot;scan-line&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;&lt;span id=&quot;uc-audit-label&quot;&gt;检查&lt;/span&gt;&lt;/button&gt;&lt;/div&gt;&lt;div class=&quot;uc-health-empty&quot; id=&quot;uc-health-empty&quot;&gt;&lt;i class=&quot;uc-icon&quot; data-lucide=&quot;shield-check&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;&lt;p style=&quot;margin-top:12px&quot;&gt;点击“检查”开始扫描工作区文件状态。&lt;/p&gt;&lt;/div&gt;&lt;div id=&quot;uc-health-report&quot; hidden&gt;&lt;p class=&quot;uc-small uc-muted&quot; style=&quot;overflow-wrap:anywhere;margin-bottom:8px&quot;&gt;当前 Stream: &lt;span class=&quot;uc-mono&quot;&gt;//DemoDepot/DemoStream&lt;/span&gt;&lt;/p&gt;&lt;details class=&quot;uc-health-group&quot;&gt;&lt;summary&gt;未映射 &lt;span class=&quot;uc-health-count&quot;&gt;0&lt;/span&gt;&lt;/summary&gt;&lt;p class=&quot;uc-health-path&quot;&gt;无&lt;/p&gt;&lt;/details&gt;&lt;details class=&quot;uc-health-group&quot; open&gt;&lt;summary&gt;磁盘缺失 &lt;span class=&quot;uc-health-count&quot;&gt;1&lt;/span&gt;&lt;/summary&gt;&lt;p class=&quot;uc-health-path&quot;&gt;Project/Content/ExampleMissing.uasset&lt;/p&gt;&lt;/details&gt;&lt;details class=&quot;uc-health-group&quot;&gt;&lt;summary&gt;未入库 &lt;span class=&quot;uc-health-count&quot;&gt;0&lt;/span&gt;&lt;/summary&gt;&lt;p class=&quot;uc-health-path&quot;&gt;无&lt;/p&gt;&lt;/details&gt;&lt;details class=&quot;uc-health-group&quot; open&gt;&lt;summary&gt;已修改 &lt;span class=&quot;uc-health-count&quot;&gt;1&lt;/span&gt;&lt;/summary&gt;&lt;p class=&quot;uc-health-path&quot;&gt;Project/Config/DefaultEngine.ini&lt;/p&gt;&lt;/details&gt;&lt;details class=&quot;uc-health-group&quot; open&gt;&lt;summary&gt;&lt;span class=&quot;uc-red&quot;&gt;需解决&lt;/span&gt; &lt;span class=&quot;uc-health-count uc-red&quot;&gt;1&lt;/span&gt;&lt;/summary&gt;&lt;p class=&quot;uc-health-path&quot;&gt;Project/Content/ExampleConflict.uasset&lt;/p&gt;&lt;/details&gt;&lt;/div&gt;&lt;p class=&quot;uc-readonly&quot;&gt;只读报告 · 不提供修复操作&lt;/p&gt;&lt;/section&gt;
+  &lt;/main&gt;
+ &lt;/div&gt;
+ &lt;div class=&quot;uc-modal-layer&quot; id=&quot;uc-settings-modal&quot; hidden&gt;&lt;section class=&quot;uc-dialog uc-dialog-wide&quot; role=&quot;dialog&quot; aria-modal=&quot;true&quot; aria-labelledby=&quot;uc-settings-title&quot;&gt;&lt;div class=&quot;uc-dialog-head&quot;&gt;&lt;div&gt;&lt;h2 id=&quot;uc-settings-title&quot;&gt;设置&lt;/h2&gt;&lt;p id=&quot;uc-settings-scope&quot;&gt;Demo_Stream_Alice&lt;/p&gt;&lt;/div&gt;&lt;button class=&quot;uc-icon-button&quot; data-close aria-label=&quot;关闭设置&quot;&gt;&lt;i class=&quot;uc-icon&quot; data-lucide=&quot;x&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;&lt;/button&gt;&lt;/div&gt;&lt;div class=&quot;uc-settings-tabs&quot; role=&quot;group&quot; aria-label=&quot;设置范围&quot;&gt;&lt;button class=&quot;uc-settings-tab&quot; id=&quot;uc-settings-workspace-tab&quot; aria-pressed=&quot;true&quot;&gt;此工作区&lt;/button&gt;&lt;button class=&quot;uc-settings-tab&quot; id=&quot;uc-settings-app-tab&quot; aria-pressed=&quot;false&quot;&gt;应用设置&lt;/button&gt;&lt;/div&gt;&lt;div id=&quot;uc-settings-workspace&quot;&gt;&lt;div class=&quot;uc-fields&quot;&gt;&lt;div&gt;&lt;label class=&quot;uc-label&quot; for=&quot;uc-threads&quot;&gt;并行线程&lt;/label&gt;&lt;input class=&quot;uc-input&quot; id=&quot;uc-threads&quot; type=&quot;number&quot; min=&quot;1&quot; max=&quot;16&quot; value=&quot;4&quot;&gt;&lt;p class=&quot;uc-hint&quot;&gt;1–16，设为 1 关闭并行同步&lt;/p&gt;&lt;/div&gt;&lt;div&gt;&lt;label class=&quot;uc-label&quot; for=&quot;uc-interval&quot;&gt;落后检查间隔（分钟）&lt;/label&gt;&lt;input class=&quot;uc-input&quot; id=&quot;uc-interval&quot; type=&quot;number&quot; min=&quot;5&quot; max=&quot;1440&quot; value=&quot;60&quot;&gt;&lt;p class=&quot;uc-hint&quot;&gt;空闲时检查待同步文件&lt;/p&gt;&lt;/div&gt;&lt;div class=&quot;uc-full&quot;&gt;&lt;h3&gt;排除路径&lt;/h3&gt;&lt;p class=&quot;uc-hint&quot; style=&quot;margin-bottom:10px&quot;&gt;路径相对于项目目录&lt;/p&gt;&lt;div id=&quot;uc-exclusions&quot;&gt;&lt;div class=&quot;uc-exclusion&quot;&gt;&lt;span&gt;Binaries&lt;/span&gt;&lt;button class=&quot;uc-icon-button&quot; data-remove-exclusion aria-label=&quot;移除 Binaries&quot;&gt;×&lt;/button&gt;&lt;/div&gt;&lt;div class=&quot;uc-exclusion&quot;&gt;&lt;span&gt;Content/Developers&lt;/span&gt;&lt;button class=&quot;uc-icon-button&quot; data-remove-exclusion aria-label=&quot;移除 Content/Developers&quot;&gt;×&lt;/button&gt;&lt;/div&gt;&lt;/div&gt;&lt;div class=&quot;uc-row&quot; style=&quot;margin-top:10px;flex-wrap:nowrap&quot;&gt;&lt;input class=&quot;uc-input&quot; id=&quot;uc-exclusion-input&quot; placeholder=&quot;添加路径…&quot; aria-label=&quot;排除路径&quot;&gt;&lt;button class=&quot;uc-button&quot; id=&quot;uc-add-exclusion&quot;&gt;添加&lt;/button&gt;&lt;/div&gt;&lt;p class=&quot;uc-hint uc-red&quot; id=&quot;uc-exclusion-error&quot; role=&quot;alert&quot; hidden&gt;&lt;/p&gt;&lt;/div&gt;&lt;/div&gt;&lt;div class=&quot;uc-dialog-foot&quot;&gt;&lt;button class=&quot;uc-button&quot; data-close&gt;取消&lt;/button&gt;&lt;button class=&quot;uc-button uc-primary&quot; id=&quot;uc-save-workspace-settings&quot;&gt;保存&lt;/button&gt;&lt;/div&gt;&lt;/div&gt;&lt;div id=&quot;uc-settings-app&quot; hidden&gt;&lt;div class=&quot;uc-app-setting uc-row uc-between&quot;&gt;&lt;div&gt;&lt;h3&gt;语言&lt;/h3&gt;&lt;p class=&quot;uc-hint&quot;&gt;选择界面语言，立即生效。&lt;/p&gt;&lt;/div&gt;&lt;div class=&quot;uc-row&quot;&gt;&lt;button class=&quot;uc-button&quot; id=&quot;uc-locale-zh&quot; aria-pressed=&quot;true&quot;&gt;中文&lt;/button&gt;&lt;button class=&quot;uc-button&quot; id=&quot;uc-locale-en&quot; aria-pressed=&quot;false&quot;&gt;English&lt;/button&gt;&lt;/div&gt;&lt;/div&gt;&lt;div class=&quot;uc-app-setting&quot;&gt;&lt;label class=&quot;uc-check-label&quot;&gt;&lt;input type=&quot;checkbox&quot; id=&quot;uc-autostart&quot;&gt;&lt;span&gt;随 Windows 登录启动&lt;/span&gt;&lt;span class=&quot;uc-chip&quot;&gt;即时保存&lt;/span&gt;&lt;/label&gt;&lt;p class=&quot;uc-hint&quot;&gt;下次登录时隐藏到托盘启动。&lt;/p&gt;&lt;/div&gt;&lt;div class=&quot;uc-app-setting&quot;&gt;&lt;div class=&quot;uc-row uc-between&quot;&gt;&lt;h3&gt;日志&lt;/h3&gt;&lt;div class=&quot;uc-row&quot;&gt;&lt;button class=&quot;uc-button&quot; id=&quot;uc-open-logs&quot;&gt;打开日志文件夹&lt;/button&gt;&lt;button class=&quot;uc-button&quot; id=&quot;uc-export-logs&quot;&gt;导出日志&lt;/button&gt;&lt;/div&gt;&lt;/div&gt;&lt;p class=&quot;uc-hint uc-mono&quot;&gt;日志路径由应用运行环境提供&lt;/p&gt;&lt;/div&gt;&lt;div class=&quot;uc-app-setting&quot;&gt;&lt;label class=&quot;uc-check-label&quot;&gt;&lt;input type=&quot;checkbox&quot; id=&quot;uc-proxy-enabled&quot;&gt;&lt;span&gt;为自动更新启用代理&lt;/span&gt;&lt;span class=&quot;uc-chip&quot;&gt;即时保存&lt;/span&gt;&lt;/label&gt;&lt;p class=&quot;uc-hint&quot;&gt;仅用于自动更新的 GitHub 流量。&lt;/p&gt;&lt;label class=&quot;uc-label&quot; for=&quot;uc-proxy-url&quot; style=&quot;margin-top:10px&quot;&gt;代理 URL&lt;/label&gt;&lt;input class=&quot;uc-input uc-mono&quot; id=&quot;uc-proxy-url&quot; value=&quot;http://localhost:7897&quot; disabled&gt;&lt;div class=&quot;uc-row&quot; style=&quot;margin-top:10px&quot;&gt;&lt;button class=&quot;uc-button&quot; id=&quot;uc-proxy-save&quot; disabled&gt;保存 URL&lt;/button&gt;&lt;button class=&quot;uc-button&quot; id=&quot;uc-proxy-test&quot; disabled&gt;测试连接&lt;/button&gt;&lt;span class=&quot;uc-small uc-muted&quot; id=&quot;uc-proxy-status&quot; aria-live=&quot;polite&quot;&gt;&lt;/span&gt;&lt;/div&gt;&lt;/div&gt;&lt;/div&gt;&lt;/section&gt;&lt;/div&gt;
+ &lt;div class=&quot;uc-modal-layer&quot; id=&quot;uc-add-modal&quot; hidden&gt;&lt;section class=&quot;uc-dialog&quot; role=&quot;dialog&quot; aria-modal=&quot;true&quot; aria-labelledby=&quot;uc-add-title&quot;&gt;&lt;div class=&quot;uc-dialog-head&quot;&gt;&lt;div&gt;&lt;h2 id=&quot;uc-add-title&quot;&gt;添加工作区&lt;/h2&gt;&lt;p&gt;连接本地 Unreal 项目与 Perforce 工作区。&lt;/p&gt;&lt;/div&gt;&lt;button class=&quot;uc-icon-button&quot; data-close aria-label=&quot;关闭添加工作区&quot;&gt;&lt;i class=&quot;uc-icon&quot; data-lucide=&quot;x&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;&lt;/button&gt;&lt;/div&gt;&lt;form id=&quot;uc-workspace-form&quot;&gt;&lt;div class=&quot;uc-fields&quot;&gt;&lt;div class=&quot;uc-full&quot;&gt;&lt;label class=&quot;uc-label&quot; for=&quot;uc-new-name&quot;&gt;名称&lt;/label&gt;&lt;input class=&quot;uc-input&quot; id=&quot;uc-new-name&quot; name=&quot;name&quot; placeholder=&quot;我的工作区&quot; required&gt;&lt;/div&gt;&lt;div class=&quot;uc-full&quot;&gt;&lt;label class=&quot;uc-label&quot; for=&quot;uc-new-root&quot;&gt;根路径&lt;/label&gt;&lt;div class=&quot;uc-row&quot; style=&quot;flex-wrap:nowrap&quot;&gt;&lt;input class=&quot;uc-input&quot; id=&quot;uc-new-root&quot; name=&quot;root&quot; placeholder=&quot;E:\UnrealProject&quot; required&gt;&lt;button class=&quot;uc-button&quot; id=&quot;uc-browse-root&quot; type=&quot;button&quot;&gt;浏览&lt;/button&gt;&lt;/div&gt;&lt;/div&gt;&lt;div class=&quot;uc-full&quot;&gt;&lt;label class=&quot;uc-label&quot; for=&quot;uc-new-project&quot;&gt;项目目录&lt;/label&gt;&lt;input class=&quot;uc-input&quot; id=&quot;uc-new-project&quot; name=&quot;project&quot; placeholder=&quot;MyGame&quot; required&gt;&lt;p class=&quot;uc-hint&quot;&gt;根路径下的游戏项目子目录&lt;/p&gt;&lt;/div&gt;&lt;div&gt;&lt;label class=&quot;uc-label&quot; for=&quot;uc-new-client&quot;&gt;P4 Client&lt;/label&gt;&lt;input class=&quot;uc-input&quot; id=&quot;uc-new-client&quot; name=&quot;client&quot; placeholder=&quot;my_client_name&quot; required&gt;&lt;/div&gt;&lt;div&gt;&lt;label class=&quot;uc-label&quot; for=&quot;uc-new-user&quot;&gt;P4 User&lt;/label&gt;&lt;input class=&quot;uc-input&quot; id=&quot;uc-new-user&quot; name=&quot;user&quot; placeholder=&quot;username&quot; required&gt;&lt;/div&gt;&lt;/div&gt;&lt;div class=&quot;uc-dialog-foot&quot;&gt;&lt;button class=&quot;uc-button&quot; type=&quot;button&quot; data-close&gt;不添加工作区&lt;/button&gt;&lt;button class=&quot;uc-button uc-primary&quot; type=&quot;submit&quot;&gt;添加工作区&lt;/button&gt;&lt;/div&gt;&lt;/form&gt;&lt;/section&gt;&lt;/div&gt;
+ &lt;div class=&quot;uc-modal-layer&quot; id=&quot;uc-rollback-modal&quot; hidden&gt;&lt;section class=&quot;uc-dialog&quot; role=&quot;dialog&quot; aria-modal=&quot;true&quot; aria-labelledby=&quot;uc-rollback-title&quot;&gt;&lt;div class=&quot;uc-dialog-head&quot;&gt;&lt;div&gt;&lt;h2 id=&quot;uc-rollback-title&quot;&gt;回滚到 CL&lt;/h2&gt;&lt;p id=&quot;uc-rollback-subtitle&quot;&gt;从服务器选择要同步到的 CL。&lt;/p&gt;&lt;/div&gt;&lt;button class=&quot;uc-icon-button&quot; data-close aria-label=&quot;关闭回滚&quot;&gt;&lt;i class=&quot;uc-icon&quot; data-lucide=&quot;x&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;&lt;/button&gt;&lt;/div&gt;&lt;div id=&quot;uc-cl-picker&quot;&gt;&lt;button class=&quot;uc-cl-choice&quot; data-cl=&quot;381204&quot; aria-pressed=&quot;false&quot;&gt;&lt;span class=&quot;uc-row uc-between&quot;&gt;&lt;span class=&quot;uc-mono&quot;&gt;CL #381204&lt;/span&gt;&lt;span class=&quot;uc-muted&quot;&gt;user_a · 2026-09-07&lt;/span&gt;&lt;/span&gt;&lt;span class=&quot;uc-cl-description&quot;&gt;示例：更新项目内容与配置&lt;/span&gt;&lt;/button&gt;&lt;button class=&quot;uc-cl-choice&quot; data-cl=&quot;380998&quot; aria-pressed=&quot;false&quot;&gt;&lt;span class=&quot;uc-row uc-between&quot;&gt;&lt;span class=&quot;uc-mono&quot;&gt;CL #380998&lt;/span&gt;&lt;span class=&quot;uc-muted&quot;&gt;user_b · 2026-09-07&lt;/span&gt;&lt;/span&gt;&lt;span class=&quot;uc-cl-description&quot;&gt;示例：同步关卡资源&lt;/span&gt;&lt;/button&gt;&lt;p class=&quot;uc-hint&quot; style=&quot;text-align:center;margin-top:13px&quot;&gt;没有更多 CL&lt;/p&gt;&lt;/div&gt;&lt;div id=&quot;uc-cl-confirmation&quot; hidden&gt;&lt;h3 class=&quot;uc-mono&quot; id=&quot;uc-confirm-cl&quot;&gt;CL #381204&lt;/h3&gt;&lt;p class=&quot;uc-hint&quot; id=&quot;uc-confirm-description&quot;&gt;示例：更新项目内容与配置&lt;/p&gt;&lt;p class=&quot;uc-caution&quot; id=&quot;uc-rollback-warning&quot;&gt;工作区将同步到所选 CL。当前版本上未同步的文件会被覆盖。请先关闭 UE 编辑器。&lt;/p&gt;&lt;/div&gt;&lt;div class=&quot;uc-dialog-foot&quot;&gt;&lt;button class=&quot;uc-button&quot; data-close&gt;保持当前 CL&lt;/button&gt;&lt;button class=&quot;uc-button uc-primary&quot; id=&quot;uc-rollback-next&quot; disabled&gt;选择目标 CL&lt;/button&gt;&lt;/div&gt;&lt;/section&gt;&lt;/div&gt;
+ &lt;div class=&quot;uc-toast&quot; id=&quot;uc-toast&quot; role=&quot;status&quot; hidden&gt;&lt;/div&gt;
+&lt;/div&gt;
+&lt;script&gt;
+(() =&gt; {
+ const root=document.getElementById(&#x27;ugs-code&#x27;);
+ const get=id=&gt;root.querySelector(&#x27;#&#x27;+id);
+ const state={appearance:&#x27;auto&#x27;,density:&#x27;comfortable&#x27;,sidebar:228,view:&#x27;idle&#x27;};
+ let page=&#x27;sync&#x27;,selectedCl=&#x27;&#x27;,confirming=false,modal=null,toastTimer=null,healthTimer=null,cancelTimer=null,healthReady=false,locale=&#x27;zh&#x27;,lastFocus=null;
+ let workspacePrefs={threads:&#x27;4&#x27;,interval:&#x27;60&#x27;,exclusions:[&#x27;Binaries&#x27;,&#x27;Content/Developers&#x27;]};
+ const notify=message=&gt;{clearTimeout(toastTimer);get(&#x27;uc-toast&#x27;).textContent=message;get(&#x27;uc-toast&#x27;).hidden=false;toastTimer=setTimeout(()=&gt;{get(&#x27;uc-toast&#x27;).hidden=true;},3300);};
+ const busy=()=&gt;[&#x27;running&#x27;,&#x27;cancelling&#x27;,&#x27;git-running&#x27;,&#x27;rollback&#x27;].includes(state.view);
+ const showPage=next=&gt;{page=next;root.querySelectorAll(&#x27;.uc-tab&#x27;).forEach(tab=&gt;{const active=tab.id===&#x27;uc-tab-&#x27;+next;tab.setAttribute(&#x27;aria-selected&#x27;,String(active));get(tab.getAttribute(&#x27;aria-controls&#x27;)).hidden=!active;});};
+ const fitDialog=()=&gt;{root.style.minHeight=&#x27;&#x27;;if(modal){const dialog=get(modal).querySelector(&#x27;.uc-dialog&#x27;);root.style.minHeight=(dialog.getBoundingClientRect().height+58)+&#x27;px&#x27;;}};
+ const openModal=id=&gt;{lastFocus=document.activeElement;modal=id;get(id).hidden=false;root.querySelector(&#x27;.uc-shell&#x27;).inert=true;fitDialog();get(id).querySelector(&#x27;button,input&#x27;).focus();};
+ const closeModal=()=&gt;{if(modal)get(modal).hidden=true;modal=null;root.querySelector(&#x27;.uc-shell&#x27;).inert=false;root.style.minHeight=&#x27;&#x27;;if(lastFocus&amp;&amp;lastFocus.isConnected)lastFocus.focus();};
+ const render=()=&gt;{
+  root.style.colorScheme=state.appearance===&#x27;auto&#x27;?&#x27;&#x27;:state.appearance;
+  root.dataset.density=state.density;root.style.setProperty(&#x27;--uc-side-width&#x27;,state.sidebar+&#x27;px&#x27;);
+  const cl=get(&#x27;uc-target-cl&#x27;).value;const invalid=cl.length&gt;0&amp;&amp;!/^\d+$/.test(cl);
+  get(&#x27;uc-cl-error&#x27;).hidden=!invalid;get(&#x27;uc-target-cl&#x27;).setAttribute(&#x27;aria-invalid&#x27;,String(invalid));get(&#x27;uc-engine-option&#x27;).hidden=!cl||invalid;
+  get(&#x27;uc-target-hint&#x27;).textContent=cl&amp;&amp;!invalid?&#x27;同步至 CL &#x27;+cl:&#x27;留空将同步到最新版本&#x27;;get(&#x27;uc-engine-hint&#x27;).textContent=get(&#x27;uc-sync-engine&#x27;).checked?&#x27;同步项目 + UnrealEngine&#x27;:&#x27;仅同步项目（引擎通过 Git Pull）&#x27;;
+  get(&#x27;uc-behind-badge&#x27;).querySelector(&#x27;span&#x27;).textContent=state.view===&#x27;completed&#x27;?&#x27;正在检查 Perforce 更新…&#x27;:cl&amp;&amp;!invalid?&#x27;HEAD 有 8,520 个更新文件&#x27;:&#x27;8,520 个文件待同步&#x27;;
+  get(&#x27;uc-progress-title&#x27;).textContent=&#x27;正在同步项目内容&#x27;;
+  get(&#x27;uc-start-sync&#x27;).disabled=invalid||busy();get(&#x27;uc-start-git&#x27;).disabled=busy();
+  [&#x27;uc-add-workspace&#x27;,&#x27;uc-delete-workspace&#x27;,&#x27;uc-open-settings&#x27;,&#x27;uc-open-rollback&#x27;].forEach(id=&gt;get(id).disabled=busy());
+  get(&#x27;uc-delete-workspace&#x27;).hidden=busy();
+  const idle=[&#x27;idle&#x27;,&#x27;completed&#x27;,&#x27;cancelled&#x27;].includes(state.view),running=[&#x27;running&#x27;,&#x27;cancelling&#x27;,&#x27;rollback&#x27;].includes(state.view),error=[&#x27;error&#x27;,&#x27;network-error&#x27;].includes(state.view),git=state.view.startsWith(&#x27;git-&#x27;);
+  get(&#x27;uc-idle-view&#x27;).hidden=!idle;get(&#x27;uc-running-view&#x27;).hidden=!running;get(&#x27;uc-error-view&#x27;).hidden=!error;get(&#x27;uc-git-view&#x27;).hidden=!git;
+  get(&#x27;uc-last-result&#x27;).hidden=![&#x27;completed&#x27;,&#x27;cancelled&#x27;].includes(state.view);get(&#x27;uc-warning-summary&#x27;).hidden=state.view!==&#x27;completed&#x27;;get(&#x27;uc-result-title&#x27;).textContent=state.view===&#x27;cancelled&#x27;?&#x27;项目同步已取消&#x27;:&#x27;最近项目同步&#x27;;get(&#x27;uc-result-time&#x27;).textContent=state.view===&#x27;cancelled&#x27;?&#x27;已取消于同步文件&#x27;:&#x27;09-08 10:42&#x27;;get(&#x27;uc-result-description&#x27;).textContent=state.view===&#x27;cancelled&#x27;?&#x27;本次已同步 2,897 个文件&#x27;:&#x27;CL #381515 · 8,520 个文件&#x27;;
+  get(&#x27;uc-running-title&#x27;).textContent=state.view===&#x27;rollback&#x27;?&#x27;正在回滚项目&#x27;:&#x27;正在同步项目&#x27;;get(&#x27;uc-running-target&#x27;).textContent=cl?&#x27;同步至 CL &#x27;+cl:&#x27;同步至最新版本 · HEAD&#x27;;get(&#x27;uc-active-step&#x27;).textContent=cl?&#x27;同步至 CL &#x27;+cl:&#x27;同步文件&#x27;;get(&#x27;uc-cancel-text&#x27;).textContent=state.view===&#x27;cancelling&#x27;?&#x27;取消中…&#x27;:&#x27;取消同步&#x27;;get(&#x27;uc-cancel-sync&#x27;).disabled=state.view===&#x27;cancelling&#x27;||state.view===&#x27;rollback&#x27;;
+  get(&#x27;uc-error-stage&#x27;).textContent=state.view===&#x27;network-error&#x27;?&#x27;网络检查失败&#x27;:&#x27;同步文件失败&#x27;;get(&#x27;uc-error-raw&#x27;).textContent=state.view===&#x27;network-error&#x27;?&#x27;示例：Perforce 服务器暂时不可达。&#x27;:&#x27;示例：文件被其他进程占用，无法更新。&#x27;;get(&#x27;uc-retry-sync&#x27;).textContent=state.view===&#x27;network-error&#x27;?&#x27;重新开始同步&#x27;:&#x27;重试此步骤&#x27;;
+  get(&#x27;uc-git-heading&#x27;).textContent=state.view===&#x27;git-success&#x27;?&#x27;Git 拉取成功&#x27;:state.view===&#x27;git-error&#x27;?&#x27;Git 拉取失败&#x27;:&#x27;正在拉取 UnrealEngine&#x27;;get(&#x27;uc-git-action&#x27;).textContent=state.view===&#x27;git-running&#x27;?&#x27;取消拉取&#x27;:&#x27;返回空闲&#x27;;get(&#x27;uc-git-progress&#x27;).hidden=state.view!==&#x27;git-running&#x27;;get(&#x27;uc-git-error&#x27;).hidden=state.view!==&#x27;git-error&#x27;;get(&#x27;uc-git-log&#x27;).textContent=state.view===&#x27;git-success&#x27;?&#x27;保存本地更改…\nGit pull completed\n恢复本地更改…&#x27;:state.view===&#x27;git-error&#x27;?&#x27;准备下载…\n示例：远程仓库连接失败&#x27;:&#x27;保存本地更改…\n准备下载…\nReceiving objects: 62%&#x27;;
+  showPage(page);fitDialog();
+ };
+ const setView=view=&gt;{clearTimeout(cancelTimer);state.view=view;page=&#x27;sync&#x27;;render();};
+ root.querySelectorAll(&#x27;.uc-tab&#x27;).forEach(tab=&gt;tab.addEventListener(&#x27;click&#x27;,()=&gt;showPage(tab.id.replace(&#x27;uc-tab-&#x27;,&#x27;&#x27;))));
+ get(&#x27;uc-target-cl&#x27;).addEventListener(&#x27;input&#x27;,render);get(&#x27;uc-sync-engine&#x27;).addEventListener(&#x27;change&#x27;,render);
+ get(&#x27;uc-start-sync&#x27;).addEventListener(&#x27;click&#x27;,()=&gt;setView(&#x27;running&#x27;));get(&#x27;uc-start-git&#x27;).addEventListener(&#x27;click&#x27;,()=&gt;setView(&#x27;git-running&#x27;));
+ get(&#x27;uc-cancel-sync&#x27;).addEventListener(&#x27;click&#x27;,()=&gt;{setView(&#x27;cancelling&#x27;);cancelTimer=setTimeout(()=&gt;setView(&#x27;cancelled&#x27;),1400);});
+ get(&#x27;uc-retry-sync&#x27;).addEventListener(&#x27;click&#x27;,()=&gt;setView(&#x27;running&#x27;));get(&#x27;uc-dismiss-error&#x27;).addEventListener(&#x27;click&#x27;,()=&gt;setView(&#x27;idle&#x27;));
+ get(&#x27;uc-git-action&#x27;).addEventListener(&#x27;click&#x27;,()=&gt;setView(&#x27;idle&#x27;));
+ get(&#x27;uc-audit&#x27;).addEventListener(&#x27;click&#x27;,()=&gt;{get(&#x27;uc-audit&#x27;).disabled=true;get(&#x27;uc-audit-label&#x27;).textContent=&#x27;检查中…&#x27;;clearTimeout(healthTimer);healthTimer=setTimeout(()=&gt;{healthReady=true;get(&#x27;uc-health-empty&#x27;).hidden=true;get(&#x27;uc-health-report&#x27;).hidden=false;get(&#x27;uc-audit&#x27;).disabled=false;get(&#x27;uc-audit-label&#x27;).textContent=&#x27;检查&#x27;;},700);});
+ get(&#x27;uc-add-workspace&#x27;).addEventListener(&#x27;click&#x27;,()=&gt;openModal(&#x27;uc-add-modal&#x27;));get(&#x27;uc-open-settings&#x27;).addEventListener(&#x27;click&#x27;,()=&gt;{get(&#x27;uc-threads&#x27;).value=workspacePrefs.threads;get(&#x27;uc-interval&#x27;).value=workspacePrefs.interval;get(&#x27;uc-exclusions&#x27;).replaceChildren();workspacePrefs.exclusions.forEach(value=&gt;{const row=document.createElement(&#x27;div&#x27;);row.className=&#x27;uc-exclusion&#x27;;const span=document.createElement(&#x27;span&#x27;);span.textContent=value;const button=document.createElement(&#x27;button&#x27;);button.className=&#x27;uc-icon-button&#x27;;button.dataset.removeExclusion=&#x27;&#x27;;button.setAttribute(&#x27;aria-label&#x27;,&#x27;移除 &#x27;+value);button.textContent=&#x27;×&#x27;;row.append(span,button);get(&#x27;uc-exclusions&#x27;).append(row);});get(&#x27;uc-exclusion-error&#x27;).hidden=true;get(&#x27;uc-exclusion-input&#x27;).value=&#x27;&#x27;;openModal(&#x27;uc-settings-modal&#x27;);});
+ root.querySelectorAll(&#x27;[data-close]&#x27;).forEach(button=&gt;button.addEventListener(&#x27;click&#x27;,closeModal));
+ root.addEventListener(&#x27;keydown&#x27;,event=&gt;{if(event.key===&#x27;Escape&#x27;&amp;&amp;modal)closeModal();if(event.key===&#x27;Tab&#x27;&amp;&amp;modal){const buttons=[...get(modal).querySelectorAll(&#x27;button:not(:disabled),input:not(:disabled),select:not(:disabled),summary&#x27;)].filter(node=&gt;node.getClientRects().length);const first=buttons[0],last=buttons[buttons.length-1];if(event.shiftKey&amp;&amp;document.activeElement===first){event.preventDefault();last.focus();}else if(!event.shiftKey&amp;&amp;document.activeElement===last){event.preventDefault();first.focus();}}});
+ const settingsTab=app=&gt;{get(&#x27;uc-settings-app&#x27;).hidden=!app;get(&#x27;uc-settings-workspace&#x27;).hidden=app;get(&#x27;uc-settings-app-tab&#x27;).setAttribute(&#x27;aria-pressed&#x27;,String(app));get(&#x27;uc-settings-workspace-tab&#x27;).setAttribute(&#x27;aria-pressed&#x27;,String(!app));get(&#x27;uc-settings-scope&#x27;).textContent=app?&#x27;应用全局选项&#x27;:&#x27;Demo_Stream_Alice&#x27;;fitDialog();};
+ get(&#x27;uc-settings-app-tab&#x27;).addEventListener(&#x27;click&#x27;,()=&gt;settingsTab(true));get(&#x27;uc-settings-workspace-tab&#x27;).addEventListener(&#x27;click&#x27;,()=&gt;settingsTab(false));
+ get(&#x27;uc-save-workspace-settings&#x27;).addEventListener(&#x27;click&#x27;,()=&gt;{if(!get(&#x27;uc-threads&#x27;).reportValidity()||!get(&#x27;uc-interval&#x27;).reportValidity())return;workspacePrefs={threads:get(&#x27;uc-threads&#x27;).value,interval:get(&#x27;uc-interval&#x27;).value,exclusions:[...get(&#x27;uc-exclusions&#x27;).querySelectorAll(&#x27;.uc-exclusion&gt;span&#x27;)].map(e=&gt;e.textContent)};closeModal();notify(&#x27;已保存此预览中的工作区选项，未写入应用配置。&#x27;);});
+ get(&#x27;uc-exclusions&#x27;).addEventListener(&#x27;click&#x27;,event=&gt;{const button=event.target.closest(&#x27;[data-remove-exclusion]&#x27;);if(button){button.parentElement.remove();fitDialog();}});
+ const addExclusion=()=&gt;{const input=get(&#x27;uc-exclusion-input&#x27;),value=input.value.trim();const paths=[...get(&#x27;uc-exclusions&#x27;).querySelectorAll(&#x27;.uc-exclusion&gt;span&#x27;)].map(e=&gt;e.textContent);const error=!value?&#x27;路径不能为空&#x27;:value.includes(&#x27;..&#x27;)?&#x27;路径无效&#x27;:paths.includes(value)?&#x27;路径已存在&#x27;:&#x27;&#x27;;get(&#x27;uc-exclusion-error&#x27;).hidden=!error;get(&#x27;uc-exclusion-error&#x27;).textContent=error;if(error)return;const row=document.createElement(&#x27;div&#x27;);row.className=&#x27;uc-exclusion&#x27;;const span=document.createElement(&#x27;span&#x27;);span.textContent=value;const button=document.createElement(&#x27;button&#x27;);button.type=&#x27;button&#x27;;button.className=&#x27;uc-icon-button&#x27;;button.dataset.removeExclusion=&#x27;&#x27;;button.setAttribute(&#x27;aria-label&#x27;,&#x27;移除 &#x27;+value);button.textContent=&#x27;×&#x27;;row.append(span,button);get(&#x27;uc-exclusions&#x27;).append(row);input.value=&#x27;&#x27;;fitDialog();};
+ get(&#x27;uc-add-exclusion&#x27;).addEventListener(&#x27;click&#x27;,addExclusion);get(&#x27;uc-exclusion-input&#x27;).addEventListener(&#x27;keydown&#x27;,event=&gt;{if(event.key===&#x27;Enter&#x27;){event.preventDefault();addExclusion();}});
+ get(&#x27;uc-proxy-enabled&#x27;).addEventListener(&#x27;change&#x27;,()=&gt;{const enabled=get(&#x27;uc-proxy-enabled&#x27;).checked;[&#x27;uc-proxy-url&#x27;,&#x27;uc-proxy-save&#x27;,&#x27;uc-proxy-test&#x27;].forEach(id=&gt;get(id).disabled=!enabled);});
+ const proxyAction=test=&gt;{try{const url=new URL(get(&#x27;uc-proxy-url&#x27;).value||&#x27;http://localhost:7897&#x27;);if(url.username||url.password){get(&#x27;uc-proxy-status&#x27;).textContent=&#x27;代理 URL 不能包含凭据&#x27;;return;}get(&#x27;uc-proxy-status&#x27;).textContent=test?&#x27;预览：未发起网络连接&#x27;:&#x27;预览中已保存 URL&#x27;;}catch{get(&#x27;uc-proxy-status&#x27;).textContent=&#x27;代理 URL 无效&#x27;;}};
+ get(&#x27;uc-proxy-save&#x27;).addEventListener(&#x27;click&#x27;,()=&gt;proxyAction(false));get(&#x27;uc-proxy-test&#x27;).addEventListener(&#x27;click&#x27;,()=&gt;proxyAction(true));
+ get(&#x27;uc-locale-en&#x27;).addEventListener(&#x27;click&#x27;,()=&gt;notify(&#x27;应用支持中英文即时切换；本轮设计预览展示中文布局。&#x27;));get(&#x27;uc-locale-zh&#x27;).addEventListener(&#x27;click&#x27;,()=&gt;notify(&#x27;当前展示中文布局。&#x27;));
+ get(&#x27;uc-autostart&#x27;).addEventListener(&#x27;change&#x27;,()=&gt;notify(&#x27;预览中已切换启动选项，未修改 Windows 启动项。&#x27;));
+ get(&#x27;uc-workspace-form&#x27;).addEventListener(&#x27;submit&#x27;,event=&gt;{event.preventDefault();get(&#x27;uc-workspace-form&#x27;).querySelectorAll(&#x27;input&#x27;).forEach(input=&gt;{input.value=input.value.trim();});if(!get(&#x27;uc-workspace-form&#x27;).reportValidity())return;closeModal();notify(&#x27;五项必填字段已通过校验；此预览不会创建真实工作区。&#x27;);});
+ get(&#x27;uc-browse-root&#x27;).addEventListener(&#x27;click&#x27;,()=&gt;notify(&#x27;正式应用在此打开 Windows 文件夹选择器；预览可直接输入路径。&#x27;));
+ get(&#x27;uc-delete-workspace&#x27;).addEventListener(&#x27;click&#x27;,()=&gt;notify(&#x27;对应现有删除工作区入口；预览保留此示例工作区。&#x27;));
+ get(&#x27;uc-version&#x27;).addEventListener(&#x27;click&#x27;,()=&gt;notify(&#x27;对应 v1.7.0 更新日志；预览未加载提交记录。&#x27;));get(&#x27;uc-check-update&#x27;).addEventListener(&#x27;click&#x27;,()=&gt;notify(&#x27;对应检查更新入口；预览不会联网或安装更新。&#x27;));
+ get(&#x27;uc-open-logs&#x27;).addEventListener(&#x27;click&#x27;,()=&gt;notify(&#x27;正式应用在此打开日志文件夹。&#x27;));get(&#x27;uc-export-logs&#x27;).addEventListener(&#x27;click&#x27;,()=&gt;notify(&#x27;正式应用在此打开日志保存对话框。&#x27;));
+ const renderRollback=()=&gt;{get(&#x27;uc-cl-picker&#x27;).hidden=confirming;get(&#x27;uc-cl-confirmation&#x27;).hidden=!confirming;get(&#x27;uc-rollback-title&#x27;).textContent=confirming?&#x27;确认回滚&#x27;:&#x27;回滚到 CL&#x27;;get(&#x27;uc-rollback-subtitle&#x27;).textContent=confirming?&#x27;请确认要恢复的项目版本。&#x27;:&#x27;从服务器选择要同步到的 CL。&#x27;;get(&#x27;uc-rollback-next&#x27;).disabled=!selectedCl;get(&#x27;uc-rollback-next&#x27;).textContent=selectedCl?&#x27;回滚到 CL #&#x27;+selectedCl:&#x27;选择目标 CL&#x27;;root.querySelectorAll(&#x27;[data-cl]&#x27;).forEach(button=&gt;button.setAttribute(&#x27;aria-pressed&#x27;,String(button.dataset.cl===selectedCl)));get(&#x27;uc-confirm-cl&#x27;).textContent=&#x27;CL #&#x27;+selectedCl;get(&#x27;uc-confirm-description&#x27;).textContent=selectedCl===&#x27;381204&#x27;?&#x27;示例：更新项目内容与配置&#x27;:&#x27;示例：同步关卡资源&#x27;;get(&#x27;uc-rollback-warning&#x27;).textContent=&#x27;工作区将同步到 CL #&#x27;+selectedCl+&#x27;。当前版本上未同步的文件会被覆盖。请先关闭 UE 编辑器。&#x27;;fitDialog();};
+ get(&#x27;uc-open-rollback&#x27;).addEventListener(&#x27;click&#x27;,()=&gt;{selectedCl=&#x27;&#x27;;confirming=false;openModal(&#x27;uc-rollback-modal&#x27;);renderRollback();});
+ root.querySelectorAll(&#x27;[data-cl]&#x27;).forEach(button=&gt;button.addEventListener(&#x27;click&#x27;,()=&gt;{selectedCl=selectedCl===button.dataset.cl?&#x27;&#x27;:button.dataset.cl;renderRollback();}));
+ get(&#x27;uc-rollback-next&#x27;).addEventListener(&#x27;click&#x27;,()=&gt;{if(!confirming){confirming=true;renderRollback();}else{closeModal();notify(&#x27;已确认回滚到 CL #&#x27;+selectedCl+&#x27;（仅预览，未执行同步）。&#x27;);}});
+ window.addEventListener(&#x27;resize&#x27;,fitDialog);
+ render();
+ if(globalThis.Tweak){const tweak=new Tweak({container:root,onChange:()=&gt;{closeModal();page=&#x27;sync&#x27;;render();}});tweak.addSelect(state,&#x27;view&#x27;,{label:&#x27;预览现有状态&#x27;,options:[{label:&#x27;准备同步&#x27;,value:&#x27;idle&#x27;},{label:&#x27;项目同步中&#x27;,value:&#x27;running&#x27;},{label:&#x27;取消中&#x27;,value:&#x27;cancelling&#x27;},{label:&#x27;已取消&#x27;,value:&#x27;cancelled&#x27;},{label:&#x27;完成并有警告&#x27;,value:&#x27;completed&#x27;},{label:&#x27;步骤失败&#x27;,value:&#x27;error&#x27;},{label:&#x27;网络检查失败&#x27;,value:&#x27;network-error&#x27;},{label:&#x27;Git 拉取中&#x27;,value:&#x27;git-running&#x27;},{label:&#x27;Git 拉取成功&#x27;,value:&#x27;git-success&#x27;},{label:&#x27;Git 拉取失败&#x27;,value:&#x27;git-error&#x27;}]});tweak.addSelect(state,&#x27;appearance&#x27;,{label:&#x27;外观&#x27;,options:[{label:&#x27;跟随系统&#x27;,value:&#x27;auto&#x27;},{label:&#x27;深色&#x27;,value:&#x27;dark&#x27;},{label:&#x27;浅色&#x27;,value:&#x27;light&#x27;}]});tweak.addSelect(state,&#x27;density&#x27;,{label:&#x27;信息密度&#x27;,options:[{label:&#x27;舒适&#x27;,value:&#x27;comfortable&#x27;},{label:&#x27;紧凑&#x27;,value:&#x27;compact&#x27;}]});tweak.addSlider(state,&#x27;sidebar&#x27;,{label:&#x27;侧栏宽度&#x27;,min:180,max:420,step:4,unit:&#x27;px&#x27;});}
+})();
+&lt;/script&gt;
+
+&lt;script src=&quot;https://unpkg.com/@floating-ui/core@1.7.3/dist/floating-ui.core.umd.min.js&quot;&gt;&lt;/script&gt;
+&lt;script src=&quot;https://unpkg.com/@floating-ui/dom@1.7.4/dist/floating-ui.dom.umd.min.js&quot;&gt;&lt;/script&gt;
+&lt;script&gt;
+(() =&gt; {
+  if (window.FloatingUIDOM == null) {
+    return;
+  }
+  const { autoUpdate, computePosition, flip, offset, shift, size } =
+    window.FloatingUIDOM;
+  const tooltipPlacements = new Set([&quot;top&quot;, &quot;right&quot;, &quot;bottom&quot;, &quot;left&quot;]);
+  const tooltipId = `codex-visualization-tooltip-${
+    window.crypto?.randomUUID?.() ?? Date.now().toString(36)
+  }`;
+  const tooltipGap = 5;
+  const hoverDelay = 700;
+  const skipDelay = 300;
+  let activeTrigger = null;
+  let pendingTrigger = null;
+  let tooltip = null;
+  let openTimeout = null;
+  let autoUpdateCleanup = null;
+  let positionRequest = 0;
+  let skipDelayUntil = 0;
+  let lastPointerWasTouch = false;
+  let pinnedByTouch = false;
+
+  const getTrigger = (target) =&gt;
+    target?.nodeType === Node.ELEMENT_NODE
+      ? target.closest(&quot;[data-tooltip]&quot;)
+      : null;
+  const containsTarget = (trigger, target) =&gt;
+    target?.nodeType != null &amp;&amp; trigger.contains(target);
+  const getContent = (trigger) =&gt;
+    trigger.getAttribute(&quot;data-tooltip&quot;)?.trim() ?? &quot;&quot;;
+  const getPlacement = (trigger) =&gt; {
+    const placement = trigger.getAttribute(&quot;data-tooltip-placement&quot;);
+    return tooltipPlacements.has(placement) ? placement : &quot;top&quot;;
+  };
+  const getTooltip = () =&gt; {
+    if (tooltip == null) {
+      tooltip = document.createElement(&quot;div&quot;);
+      tooltip.id = tooltipId;
+      tooltip.className = &quot;tooltip&quot;;
+      tooltip.setAttribute(&quot;role&quot;, &quot;tooltip&quot;);
+    }
+    return tooltip;
+  };
+  const setDescribedBy = (trigger, described) =&gt; {
+    const ids = new Set(
+      (trigger.getAttribute(&quot;aria-describedby&quot;) ?? &quot;&quot;)
+        .split(/\s+/)
+        .filter(Boolean),
+    );
+    if (described) {
+      ids.add(tooltipId);
+    } else {
+      ids.delete(tooltipId);
+    }
+    if (ids.size === 0) {
+      trigger.removeAttribute(&quot;aria-describedby&quot;);
+    } else {
+      trigger.setAttribute(&quot;aria-describedby&quot;, [...ids].join(&quot; &quot;));
+    }
+  };
+  const clearOpenTimeout = () =&gt; {
+    if (openTimeout != null) {
+      window.clearTimeout(openTimeout);
+      openTimeout = null;
+    }
+    pendingTrigger = null;
+  };
+  const closeTooltip = (activateSkipDelay = true) =&gt; {
+    clearOpenTimeout();
+    pinnedByTouch = false;
+    positionRequest += 1;
+    autoUpdateCleanup?.();
+    autoUpdateCleanup = null;
+    if (activeTrigger == null) {
+      return;
+    }
+    setDescribedBy(activeTrigger, false);
+    activeTrigger = null;
+    tooltip?.remove();
+    if (activateSkipDelay) {
+      skipDelayUntil = Date.now() + skipDelay;
+    }
+  };
+  const updatePosition = (trigger, floating) =&gt; {
+    const request = ++positionRequest;
+    void computePosition(trigger, floating, {
+      middleware: [
+        offset(tooltipGap),
+        flip({ padding: tooltipGap }),
+        shift({ padding: tooltipGap }),
+        size({
+          padding: tooltipGap,
+          apply({ availableHeight, availableWidth, elements }) {
+            elements.floating.style.setProperty(
+              &quot;--tooltip-available-width&quot;,
+              `${Math.max(0, availableWidth)}px`,
+            );
+            elements.floating.style.setProperty(
+              &quot;--tooltip-available-height&quot;,
+              `${Math.max(0, availableHeight)}px`,
+            );
+          },
+        }),
+      ],
+      placement: getPlacement(trigger),
+      strategy: &quot;fixed&quot;,
+    })
+      .then(({ x, y }) =&gt; {
+        if (activeTrigger !== trigger || request !== positionRequest) {
+          return;
+        }
+        const scale = window.devicePixelRatio || 1;
+        floating.style.transform = `translate(${Math.round(x * scale) / scale}px, ${Math.round(y * scale) / scale}px)`;
+        floating.style.visibility = &quot;visible&quot;;
+      })
+      .catch(() =&gt; {
+        if (activeTrigger === trigger &amp;&amp; request === positionRequest) {
+          closeTooltip(false);
+        }
+      });
+  };
+  const openTooltip = (trigger) =&gt; {
+    const content = getContent(trigger);
+    if (!trigger.isConnected || content.length === 0) {
+      return;
+    }
+    clearOpenTimeout();
+    if (activeTrigger === trigger) {
+      return;
+    }
+    closeTooltip();
+    const floating = getTooltip();
+    floating.textContent = content;
+    floating.style.visibility = &quot;hidden&quot;;
+    floating.style.transform = &quot;translate(0, 0)&quot;;
+    document.body.appendChild(floating);
+    activeTrigger = trigger;
+    setDescribedBy(trigger, true);
+    autoUpdateCleanup = autoUpdate(trigger, floating, () =&gt; {
+      updatePosition(trigger, floating);
+    });
+  };
+  const requestOpen = (trigger, immediate = false) =&gt; {
+    if (
+      getContent(trigger).length === 0 ||
+      activeTrigger === trigger ||
+      pendingTrigger === trigger
+    ) {
+      return;
+    }
+    clearOpenTimeout();
+    pendingTrigger = trigger;
+    const delay =
+      immediate || activeTrigger != null || Date.now() &lt; skipDelayUntil
+        ? 0
+        : hoverDelay;
+    if (delay === 0) {
+      openTooltip(trigger);
+      return;
+    }
+    openTimeout = window.setTimeout(() =&gt; {
+      openTimeout = null;
+      pendingTrigger = null;
+      openTooltip(trigger);
+    }, delay);
+  };
+  const handlePointerOpen = (event) =&gt; {
+    if (event.pointerType === &quot;touch&quot;) {
+      return;
+    }
+    const trigger = getTrigger(event.target);
+    if (trigger == null || containsTarget(trigger, event.relatedTarget)) {
+      return;
+    }
+    requestOpen(trigger);
+  };
+  const handlePointer = (event) =&gt; {
+    lastPointerWasTouch =
+      event.type === &quot;pointerdown&quot; &amp;&amp; event.pointerType === &quot;touch&quot;;
+  };
+  const handleTouchClick = (event) =&gt; {
+    const isTouch = event.pointerType === &quot;touch&quot; || lastPointerWasTouch;
+    lastPointerWasTouch = false;
+    if (!isTouch || event.detail === 0) {
+      return;
+    }
+    const trigger = getTrigger(event.target);
+    if (
+      trigger == null ||
+      !trigger.isConnected ||
+      getContent(trigger).length === 0 ||
+      (pinnedByTouch &amp;&amp; activeTrigger === trigger)
+    ) {
+      if (pinnedByTouch) {
+        closeTooltip();
+      }
+      return;
+    }
+    openTooltip(trigger);
+    pinnedByTouch = activeTrigger === trigger;
+    window.setTimeout(() =&gt; {
+      if (activeTrigger === trigger &amp;&amp; !trigger.isConnected) {
+        closeTooltip(false);
+      }
+    }, 0);
+  };
+  const handleLeave = (event) =&gt; {
+    if (pinnedByTouch) {
+      return;
+    }
+    const trigger = getTrigger(event.target);
+    if (trigger == null || containsTarget(trigger, event.relatedTarget)) {
+      return;
+    }
+    if (activeTrigger === trigger || pendingTrigger === trigger) {
+      closeTooltip();
+    }
+  };
+  const handleFocusIn = (event) =&gt; {
+    const trigger = getTrigger(event.target);
+    if (trigger?.matches(&quot;:focus-visible&quot;)) {
+      requestOpen(trigger, true);
+    }
+  };
+  const handleKeyDown = (event) =&gt; {
+    if (event.key === &quot;Escape&quot;) {
+      closeTooltip();
+    }
+  };
+  const handleContextMenu = (event) =&gt; {
+    lastPointerWasTouch = false;
+    const trigger = getTrigger(event.target);
+    if (activeTrigger === trigger || pendingTrigger === trigger) {
+      closeTooltip();
+    }
+  };
+  const destroy = () =&gt; {
+    closeTooltip(false);
+    lastPointerWasTouch = false;
+    document.removeEventListener(&quot;pointerover&quot;, handlePointerOpen);
+    document.removeEventListener(&quot;pointerdown&quot;, handlePointer);
+    document.removeEventListener(&quot;pointercancel&quot;, handlePointer);
+    document.removeEventListener(&quot;click&quot;, handleTouchClick);
+    document.removeEventListener(&quot;pointerout&quot;, handleLeave);
+    document.removeEventListener(&quot;focusin&quot;, handleFocusIn);
+    document.removeEventListener(&quot;focusout&quot;, handleLeave);
+    document.removeEventListener(&quot;keydown&quot;, handleKeyDown);
+    document.removeEventListener(&quot;contextmenu&quot;, handleContextMenu);
+    tooltip = null;
+  };
+
+  document.addEventListener(&quot;pointerover&quot;, handlePointerOpen);
+  document.addEventListener(&quot;pointerdown&quot;, handlePointer);
+  document.addEventListener(&quot;pointercancel&quot;, handlePointer);
+  document.addEventListener(&quot;click&quot;, handleTouchClick);
+  document.addEventListener(&quot;pointerout&quot;, handleLeave);
+  document.addEventListener(&quot;focusin&quot;, handleFocusIn);
+  document.addEventListener(&quot;focusout&quot;, handleLeave);
+  document.addEventListener(&quot;keydown&quot;, handleKeyDown);
+  document.addEventListener(&quot;contextmenu&quot;, handleContextMenu);
+  window.addEventListener(&quot;pagehide&quot;, destroy, { once: true });
+})();
+&lt;/script&gt;
+&lt;script id=&quot;codex-visualization-tabs&quot;&gt;
+(() =&gt; {
+  const selector = &#x27;.nav[role=&quot;tablist&quot;] [role=&quot;tab&quot;]&#x27;;
+  const disabled = &#x27;:disabled,[aria-disabled=&quot;true&quot;]&#x27;;
+  const selectTab = (selected) =&gt; {
+    const panelId = selected.getAttribute(&quot;aria-controls&quot;);
+    for (const tab of selected.closest(&#x27;[role=&quot;tablist&quot;]&#x27;).querySelectorAll(&#x27;[role=&quot;tab&quot;]&#x27;)) {
+      const active = tab === selected;
+      tab.classList.toggle(&quot;active&quot;, active);
+      tab.setAttribute(&quot;aria-selected&quot;, String(active));
+      const id = tab.getAttribute(&quot;aria-controls&quot;);
+      const panel = id &amp;&amp; document.getElementById(id);
+      if (panel != null) {
+        panel.hidden = id !== panelId;
+        if (!panel.hidden &amp;&amp; selected.id) {
+          panel.setAttribute(&quot;aria-labelledby&quot;, selected.id);
+        }
+      }
+    }
+  };
+  const interact = (event) =&gt; {
+    const tab = event.target?.closest?.(selector);
+    if (event.defaultPrevented || tab == null || tab.matches(disabled)) {
+      return;
+    }
+    if (event.type === &quot;click&quot;) {
+      selectTab(tab);
+      return;
+    }
+    const tabs = Array.from(
+      tab.closest(&#x27;[role=&quot;tablist&quot;]&#x27;).querySelectorAll(&#x27;[role=&quot;tab&quot;]&#x27;),
+    ).filter((candidate) =&gt; !candidate.matches(disabled));
+    const current = tabs.indexOf(tab);
+    let next;
+    if (event.key === &quot;ArrowRight&quot; || event.key === &quot;ArrowDown&quot;) {
+      next = (current + 1) % tabs.length;
+    } else if (event.key === &quot;ArrowLeft&quot; || event.key === &quot;ArrowUp&quot;) {
+      next = (current + tabs.length - 1) % tabs.length;
+    } else if (event.key === &quot;Home&quot;) {
+      next = 0;
+    } else if (event.key === &quot;End&quot;) {
+      next = tabs.length - 1;
+    } else {
+      return;
+    }
+    event.preventDefault();
+    tabs[next].focus();
+    selectTab(tabs[next]);
+  };
+
+  for (const list of document.querySelectorAll(&#x27;.nav[role=&quot;tablist&quot;]&#x27;)) {
+    const selected =
+      list.querySelector(&#x27;[role=&quot;tab&quot;][aria-selected=&quot;true&quot;]&#x27;) ??
+      list.querySelector(&#x27;[role=&quot;tab&quot;].active&#x27;) ??
+      list.querySelector(&#x27;[role=&quot;tab&quot;]&#x27;);
+    if (selected != null) {
+      selectTab(selected);
+    }
+  }
+  document.addEventListener(&quot;click&quot;, interact);
+  document.addEventListener(&quot;keydown&quot;, interact);
+  window.addEventListener(&quot;pagehide&quot;, () =&gt; {
+    document.removeEventListener(&quot;click&quot;, interact);
+    document.removeEventListener(&quot;keydown&quot;, interact);
+  }, { once: true });
+})();
+&lt;/script&gt;
+&lt;script id=&quot;codex-visualization-lucide&quot; async src=&quot;https://unpkg.com/lucide@1.17.0/dist/umd/lucide.js&quot;&gt;&lt;/script&gt;
+&lt;script&gt;
+(() =&gt; {
+  const initialize = () =&gt; {
+    globalThis.lucide?.createIcons({ attrs: { width: 16, height: 16 } });
+  };
+  if (globalThis.lucide != null) {
+    initialize();
+    return;
+  }
+  document
+    .getElementById(&quot;codex-visualization-lucide&quot;)
+    ?.addEventListener(&quot;load&quot;, initialize, { once: true });
+})();
+&lt;/script&gt;
+
+&lt;/body&gt;
+&lt;/html&gt;
+"></iframe>
+</body>
+</html>

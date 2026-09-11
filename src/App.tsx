@@ -1,0 +1,310 @@
+import { AppLayout } from "@/components/layout/AppLayout";
+import { AppTitleBar } from "@/components/layout/AppTitleBar";
+import { Sidebar } from "@/components/layout/Sidebar";
+import { SyncDashboard } from "@/components/sync/SyncDashboard";
+import { SettingsDialog } from "@/components/settings/SettingsDialog";
+import { RollbackDialog } from "@/components/history/RollbackDialog";
+import { TooltipProvider } from "@/components/ui/tooltip";
+import { WorkspaceEmptyState } from "@/components/workspace/WorkspaceEmptyState";
+import { WorkspaceHeader } from "@/components/workspace/WorkspaceHeader";
+import { useWorkspaces } from "@/hooks/useWorkspaces";
+import { useSync } from "@/hooks/useSync";
+import { useGit } from "@/hooks/useGit";
+import { useBehindCheck } from "@/hooks/useBehindCheck";
+import { useHistory } from "@/hooks/useHistory";
+import { useUpdater } from "@/hooks/useUpdater";
+import { useState, useCallback, useEffect } from "react";
+import * as commands from "@/lib/commands";
+import type { GitBranchInfo, WarningEntry } from "@/lib/types";
+
+function App() {
+  const workspaces = useWorkspaces();
+  const refreshCurrentCl = workspaces.refreshCurrentCl;
+
+  // Phase 14 (SUMM-23 — checker blocker #1 fix): App owns the last-sync
+  // warnings slot as lifted state. Both useSync (forward/force-sync via
+  // onWarningsChange) and useHistory (rollback via the widened
+  // onRollbackComplete) report UP into this single slot — there is no
+  // per-completion-path branch in the render layer, so all three completion
+  // paths render identically through the same IdlePanel.
+  const [lastSyncWarnings, setLastSyncWarnings] = useState<WarningEntry[]>([]);
+
+  const onRollbackComplete = useCallback(
+    (cl: string | null, warnings: WarningEntry[]) => {
+      refreshCurrentCl(cl);
+      // Phase 14 (SUMM-23): route rollback's backend `warnings: merged`
+      // (sync_orchestrator.rs:484) into the lifted slot. Rollback's
+      // SyncCompleted arrives on useHistory's OWN Channel, distinct from
+      // useSync's — without this wiring rollback warnings never render.
+      setLastSyncWarnings(warnings);
+    },
+    [refreshCurrentCl],
+  );
+  const history = useHistory(workspaces.selectedWorkspace?.id ?? null, onRollbackComplete);
+
+  // Single sync hook that refreshes history on completion
+  const onSyncComplete = useCallback(
+    (cl: string | null) => {
+      refreshCurrentCl(cl);
+      history.loadHistory();
+    },
+    [refreshCurrentCl, history.loadHistory],
+  );
+  // Phase 14 (SUMM-23): forward/force-sync warnings flow UP via the
+  // onWarningsChange callback (Plan 14-01 Task 2 added the param).
+  // CR-WR-01: memoized like onSyncComplete/onRollbackComplete — a raw arrow
+  // here gets a fresh reference every App render, and since App re-renders
+  // ~5×/sec on sync.progress, that propagates into useSync's resetToIdle
+  // dep array and tears down + re-creates the 5s periodic-reconciliation
+  // setInterval before it can ever elapse, defeating the safety net
+  // designed for exactly the running-sync case. setLastSyncWarnings is a
+  // stable setState dispatcher, so [] is safe.
+  const onWarningsChange = useCallback(
+    (w: WarningEntry[]) => setLastSyncWarnings(w),
+    [],
+  );
+  const sync = useSync(onSyncComplete, onWarningsChange);
+  const git = useGit();
+  const behind = useBehindCheck();
+  const updater = useUpdater();
+  const isSyncRunning = sync.syncState === "running";
+  const isOperationRunning =
+    isSyncRunning || history.isRollingBack || git.gitState === "running";
+  const [gitBranchInfo, setGitBranchInfo] = useState<GitBranchInfo | null>(null);
+  const [gitBranchLoading, setGitBranchLoading] = useState(false);
+  // P4 stream of the selected workspace's client spec (null = classic client
+  // OR not-yet-fetched OR fetch failed — the UI shows the `classic client`
+  // placeholder in all three cases). Static per-client — fetched once on
+  // workspace switch, never polled.
+  const [streamInfo, setStreamInfo] = useState<string | null>(null);
+
+  const fetchGitStatus = useCallback(async () => {
+    if (workspaces.selectedWorkspace) {
+      setGitBranchLoading(true);
+      try {
+        const info = await commands.gitStatus(workspaces.selectedWorkspace.id);
+        setGitBranchInfo(info);
+      } catch {
+        setGitBranchInfo(null);
+      } finally {
+        setGitBranchLoading(false);
+      }
+    } else {
+      setGitBranchInfo(null);
+      setGitBranchLoading(false);
+    }
+  }, [workspaces.selectedWorkspace]);
+
+  useEffect(() => {
+    fetchGitStatus();
+  }, [fetchGitStatus]);
+
+  // Fetch the bound p4 stream once per workspace switch (mirrors git status —
+  // no loading flag needed; the workspace's p4Client line renders immediately
+  // regardless and stream is fast). Catch -> null so a p4 failure shows the
+  // placeholder instead of an error toast.
+  const fetchStream = useCallback(async () => {
+    if (workspaces.selectedWorkspace) {
+      try {
+        const s = await commands.getWorkspaceStream(workspaces.selectedWorkspace.id);
+        setStreamInfo(s);
+      } catch {
+        setStreamInfo(null);
+      }
+    } else {
+      setStreamInfo(null);
+    }
+  }, [workspaces.selectedWorkspace]);
+
+  useEffect(() => {
+    fetchStream();
+  }, [fetchStream]);
+
+  // Idle Perforce behind-check: fires immediately when the idle view loads,
+  // then repeats every intervalMinutes. Never runs while a sync is in progress,
+  // and any in-flight result is dropped (behind.cancel) when leaving the idle state.
+  const behindRunCheck = behind.runCheck;
+  const behindCancel = behind.cancel;
+  const selectedWorkspaceId = workspaces.selectedWorkspace?.id ?? null;
+  const intervalMinutes = workspaces.selectedWorkspace?.intervalMinutes ?? 60;
+  useEffect(() => {
+    if (isOperationRunning || !selectedWorkspaceId) {
+      // Suppressed while syncing (or no workspace) — invalidate pending result.
+      behindCancel();
+      return;
+    }
+
+    // Fire immediately so the badge is populated as soon as the idle view loads.
+    behindRunCheck(selectedWorkspaceId);
+
+    const intervalTimer = setInterval(() => {
+      behindRunCheck(selectedWorkspaceId);
+    }, intervalMinutes * 60_000);
+
+    return () => {
+      clearInterval(intervalTimer);
+    };
+  }, [selectedWorkspaceId, intervalMinutes, isOperationRunning, behindRunCheck, behindCancel]);
+
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [isWorkspaceFormOpen, setIsWorkspaceFormOpen] = useState(false);
+  const [settingsKey, setSettingsKey] = useState(0);
+  const [isRollbackDialogOpen, setIsRollbackDialogOpen] = useState(false);
+
+  const handleStartSync = () => {
+    if (isOperationRunning) {
+      return;
+    }
+    if (workspaces.selectedWorkspace) {
+      sync.startSync(
+        workspaces.selectedWorkspace.id,
+        sync.targetCl || undefined,
+      );
+    }
+  };
+
+  const handleRetryStep = (step: string) => {
+    if (workspaces.selectedWorkspace) {
+      sync.retryStep(workspaces.selectedWorkspace.id, step);
+    }
+  };
+
+  const handleRollback = () => {
+    setIsRollbackDialogOpen(true);
+  };
+
+  const handleRollbackConfirm = (targetCl: string) => {
+    if (workspaces.selectedWorkspace) {
+      // Phase 14 (D-02 — checker blocker #2 fix): clear the prior summary
+      // BEFORE the rollback starts so a stale summary never persists into
+      // the new run. useSync's 5 clear sites (Plan 14-01) cover the sync
+      // lifecycle; this + handleGitPull cover rollback + git-pull starts.
+      setLastSyncWarnings([]);
+      history.startRollback(targetCl);
+      setIsRollbackDialogOpen(false);
+    }
+  };
+
+  const handleGitPull = useCallback(async () => {
+    if (isOperationRunning) {
+      return;
+    }
+    if (workspaces.selectedWorkspace) {
+      // Phase 14 (D-02 — checker blocker #2 fix): clear the prior summary
+      // BEFORE git-pull starts. git-pull emits empty warnings
+      // (git_service.rs:381-386), so this is a pure clear — it never
+      // populates, only wipes the slate so a stale sync summary does not
+      // persist into a git-pull idle screen.
+      setLastSyncWarnings([]);
+      try {
+        await git.startGitPull(workspaces.selectedWorkspace.id);
+        fetchGitStatus();
+      } catch {
+        // Error handling is done in useGit hook
+      }
+    }
+  }, [workspaces.selectedWorkspace, git.startGitPull, fetchGitStatus, isOperationRunning]);
+
+  return (
+    <TooltipProvider>
+      {/* 24-02 (D-03): titlebar + shell share one 100vh column — AppLayout's
+          root (h-screen min-h-0) shrinks to 100vh-34px inside this wrapper,
+          so the added bar does not push the shell past the viewport. */}
+      <div className="flex h-screen flex-col">
+        <AppTitleBar />
+        <AppLayout
+          sidebar={
+          <Sidebar
+            workspaces={workspaces.workspaces}
+            selectedId={workspaces.selectedId}
+            currentCl={workspaces.currentCl}
+            isBusy={isOperationRunning}
+            onSelect={workspaces.selectWorkspace}
+            onDelete={workspaces.deleteWorkspace}
+            onAdd={workspaces.addWorkspace}
+            onOpenSettings={() => setIsSettingsOpen(true)}
+            isSettingsDisabled={isOperationRunning}
+            updaterInfo={updater.info}
+            onCheckUpdate={updater.checkAndInstall}
+            isFormOpen={isWorkspaceFormOpen}
+            onFormOpenChange={setIsWorkspaceFormOpen}
+          />
+        }
+      >
+        {workspaces.workspaces.length === 0 && !workspaces.isLoading ? (
+          <WorkspaceEmptyState onAdd={() => setIsWorkspaceFormOpen(true)} />
+        ) : (
+          <div className="flex min-h-0 flex-1 flex-col">
+            <WorkspaceHeader
+              selectedWorkspace={workspaces.selectedWorkspace}
+              stream={streamInfo}
+              p4Client={workspaces.selectedWorkspace?.p4Client ?? null}
+              gitBranchInfo={gitBranchInfo}
+              gitBranchLoading={gitBranchLoading}
+            />
+            <SyncDashboard
+            syncState={sync.syncState}
+            stepStatuses={sync.stepStatuses}
+            progress={sync.progress}
+            logLines={sync.logLines}
+            currentStep={sync.currentStep}
+            errorInfo={sync.errorInfo}
+            lastSyncResult={sync.lastSyncResult}
+            lastSyncWarnings={lastSyncWarnings}
+            selectedWorkspace={workspaces.selectedWorkspace}
+            targetCl={sync.targetCl}
+            onTargetClChange={sync.setTargetCl}
+            syncEngine={sync.syncEngine}
+            onSyncEngineChange={sync.setSyncEngine}
+            currentSubStep={sync.currentSubStep}
+            onStartSync={handleStartSync}
+            onStopSync={sync.stopSync}
+            isCancelling={sync.isCancelling}
+            onRetryStep={handleRetryStep}
+            onDismissError={sync.dismissError}
+            onRollback={handleRollback}
+            historyRecords={history.records}
+            historyLoading={history.isLoading}
+            historyRollingBack={history.isRollingBack}
+            gitState={git.gitState}
+            gitLogLines={git.logLines}
+            gitErrorInfo={git.errorInfo}
+            gitProgress={git.gitProgress}
+            gitCurrentStep={git.gitCurrentStep}
+            gitCurrentSubStep={git.gitCurrentSubStep}
+            onGitPull={handleGitPull}
+            onStopGitPull={git.stopGitPull}
+            onDismissGitResult={git.dismissGitResult}
+            gitBranchInfo={gitBranchInfo}
+            gitBranchLoading={gitBranchLoading}
+            behindInfo={behind.behindInfo}
+            behindLoading={behind.behindLoading}
+            stream={streamInfo}
+            p4Client={workspaces.selectedWorkspace?.p4Client ?? null}
+            currentCl={workspaces.currentCl}
+            />
+          </div>
+        )}
+        </AppLayout>
+      </div>
+      <SettingsDialog
+        key={settingsKey}
+        open={isSettingsOpen}
+        onOpenChange={(open) => {
+          setIsSettingsOpen(open);
+          if (!open) setSettingsKey((k) => k + 1);
+        }}
+        workspace={workspaces.selectedWorkspace}
+        onSave={workspaces.updateSettings}
+      />
+      <RollbackDialog
+        open={isRollbackDialogOpen}
+        onOpenChange={setIsRollbackDialogOpen}
+        workspaceId={workspaces.selectedWorkspace?.id ?? null}
+        onRollback={handleRollbackConfirm}
+      />
+    </TooltipProvider>
+  );
+}
+
+export default App;

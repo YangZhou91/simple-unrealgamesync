@@ -1,0 +1,1384 @@
+use crate::error::AppError;
+use crate::models::{HistoryRecord, SyncEvent, WarningEntry, WorkspaceConfig};
+use crate::services::history::HistoryService;
+use crate::services::p4_executor::{merge_warning_lists, validate_target_cl, P4Executor, SyncOptions};
+use crate::services::process_manager::ProcessManager;
+use crate::services::workspace::WorkspaceService;
+use crate::utils::counting_channel::CountingChannel;
+use crate::utils::log::StepScope;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::Arc;
+use tauri::{AppHandle, Emitter, Manager};
+use tauri_plugin_log::log::{error, info, warn};
+use tokio_util::sync::CancellationToken;
+
+#[cfg(target_os = "windows")]
+use std::os::windows::process::CommandExt as _;
+
+#[cfg(target_os = "windows")]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
+
+/// Payload for sync-state app-level events consumed by the tray manager.
+/// Structured machine fields only (WIRE-03) — the tray composes display
+/// prose from the locale template table at fire time; the orchestrator
+/// never authors user-facing strings for this event. `state` uses string
+/// tags: "syncing" | "cancelled" | "completed" | "error" (tags kept from
+/// the pre-18-03 set; "cancelled"/"completed" are new dedicated tags so
+/// the notification body can distinguish them from plain idle).
+#[derive(Clone, serde::Serialize)]
+struct SyncStatePayload {
+    state: String,
+    step: Option<String>,
+    error: Option<String>,
+    files_synced: Option<u64>,
+    cl: Option<String>,
+}
+
+pub struct SyncOrchestrator {
+    p4: P4Executor,
+    process_manager: Arc<ProcessManager>,
+    pipeline_running: AtomicBool,
+}
+
+impl SyncOrchestrator {
+    pub fn new(process_manager: Arc<ProcessManager>) -> Self {
+        Self {
+            p4: P4Executor::new(),
+            process_manager,
+            pipeline_running: AtomicBool::new(false),
+        }
+    }
+
+    pub fn is_pipeline_running(&self) -> bool {
+        self.pipeline_running.load(Ordering::SeqCst)
+    }
+
+    pub async fn run_pipeline(
+        &self,
+        workspace_id: String,
+        target_cl: Option<String>,
+        include_engine: bool,
+        channel: CountingChannel,
+        app: AppHandle,
+    ) -> Result<(), AppError> {
+        if self.pipeline_running.swap(true, Ordering::SeqCst) {
+            return Err(AppError::Process(
+                "A sync pipeline is already running".into(),
+            ));
+        }
+
+        let result = self
+            .run_pipeline_inner(workspace_id, target_cl, include_engine, channel, app)
+            .await;
+        self.pipeline_running.store(false, Ordering::SeqCst);
+        result
+    }
+
+    async fn run_pipeline_inner(
+        &self,
+        workspace_id: String,
+        target_cl: Option<String>,
+        include_engine: bool,
+        channel: CountingChannel,
+        app: AppHandle,
+    ) -> Result<(), AppError> {
+        let workspace = WorkspaceService::get(&app, &workspace_id).await?;
+        let pipeline_start = std::time::Instant::now();
+
+        // Network pre-check (silent -- not a StepIndicator step, per D-01)
+        info!("[sync] workspace={}", workspace.name);
+        let step = StepScope::new("networkCheck");
+        if let Err(e) = self.p4.check_connectivity(&workspace).await {
+            error!("[sync] step=networkCheck failed: {e}");
+            step.failed();
+            let _ = channel.send(SyncEvent::SyncFailed {
+                step: "networkCheck".to_string(),
+                error: e.to_string(),
+            });
+            let _ = app.emit(
+                "sync-state",
+                SyncStatePayload {
+                    state: "error".into(),
+                    step: Some("networkCheck".to_string()),
+                    error: Some(e.to_string()),
+                    files_synced: None,
+                    cl: None,
+                },
+            );
+            return Err(e);
+        }
+        step.done("");
+        let _ = app.emit(
+            "sync-state",
+            SyncStatePayload {
+                state: "syncing".into(),
+                step: None,
+                error: None,
+                files_synced: None,
+                cl: None,
+            },
+        );
+
+        // Build SyncOptions from workspace config + target_cl
+        let options = SyncOptions {
+            target_cl: target_cl.clone(),
+            parallel_threads: workspace.parallel_threads,
+            exclusions: workspace.exclusions.clone(),
+            include_engine,
+        };
+
+        // Step 1: Close UE Editor
+        info!("[sync] workspace={}", workspace.name);
+        let step = StepScope::new("closeUe");
+        if let Err(e) = self.close_ue(&channel).await {
+            error!("[sync] step=closeUe failed: {e}");
+            step.failed();
+            let _ = channel.send(SyncEvent::SyncFailed {
+                step: "closeUe".to_string(),
+                error: e.to_string(),
+            });
+            let _ = app.emit(
+                "sync-state",
+                SyncStatePayload {
+                    state: "error".into(),
+                    step: Some("closeUe".to_string()),
+                    error: Some(e.to_string()),
+                    files_synced: None,
+                    cl: None,
+                },
+            );
+            return Err(e);
+        }
+        step.done("");
+
+        // Step 1b: Close Excel (releases write locks on .xlsx so p4 sync can update them)
+        let step = StepScope::new("closeExcel");
+        if let Err(e) = self.close_excel(&channel).await {
+            error!("[sync] step=closeExcel failed: {e}");
+            step.failed();
+            let _ = channel.send(SyncEvent::SyncFailed {
+                step: "closeExcel".to_string(),
+                error: e.to_string(),
+            });
+            let _ = app.emit(
+                "sync-state",
+                SyncStatePayload {
+                    state: "error".into(),
+                    step: Some("closeExcel".to_string()),
+                    error: Some(e.to_string()),
+                    files_synced: None,
+                    cl: None,
+                },
+            );
+            return Err(e);
+        }
+        step.done("");
+
+        // Step 2: Clean Dev Directory
+        let step = StepScope::new("cleanDevDir");
+        info!("[sync] root={}", workspace.root_path);
+        if let Err(e) = self.clean_dev_dir(&workspace, &channel).await {
+            error!("[sync] step=cleanDevDir failed: {e}");
+            step.failed();
+            let _ = channel.send(SyncEvent::SyncFailed {
+                step: "cleanDevDir".to_string(),
+                error: e.to_string(),
+            });
+            let _ = app.emit(
+                "sync-state",
+                SyncStatePayload {
+                    state: "error".into(),
+                    step: Some("cleanDevDir".to_string()),
+                    error: Some(e.to_string()),
+                    files_synced: None,
+                    cl: None,
+                },
+            );
+            return Err(e);
+        }
+        step.done("");
+
+        // Step 3: p4 sync
+        let step = StepScope::new("p4Sync");
+        info!(
+            "[sync] target_cl={}",
+            options.target_cl.as_deref().unwrap_or("none")
+        );
+        let cancel_token = CancellationToken::new();
+        self.process_manager
+            .set_cancel_token(cancel_token.clone())
+            .await;
+
+        let files_result = self
+            .p4_sync(&workspace, &channel, cancel_token, &options, &app)
+            .await;
+        self.process_manager.clear_tracked().await;
+
+        if let Err(e) = files_result {
+            if matches!(e, AppError::Cancelled) {
+                step.cancelled();
+                let _ = channel.send(SyncEvent::SyncCancelled {
+                    step: "p4Sync".to_string(),
+                });
+                let _ = app.emit(
+                    "sync-state",
+                    SyncStatePayload {
+                        state: "cancelled".into(),
+                        step: None,
+                        error: None,
+                        files_synced: None,
+                        cl: None,
+                    },
+                );
+                return Ok(());
+            }
+            error!("[sync] step=p4Sync failed: {e}");
+            step.failed();
+            let _ = channel.send(SyncEvent::SyncFailed {
+                step: "p4Sync".to_string(),
+                error: e.to_string(),
+            });
+            let _ = app.emit(
+                "sync-state",
+                SyncStatePayload {
+                    state: "error".into(),
+                    step: Some("p4Sync".to_string()),
+                    error: Some(e.to_string()),
+                    files_synced: None,
+                    cl: None,
+                },
+            );
+            return Err(e);
+        }
+        let (files_synced, p4_warnings) = files_result.unwrap();
+        step.done(&format!("files_synced={files_synced}"));
+
+        // Step 3b: Force sync Engine files (non-fatal, per D-03)
+        // Only runs when an explicit changelist is provided. An empty changelist
+        // means a lightweight project-only update — skip the Engine force sync
+        // entirely (and emit no forceSync events) per FORCESYNC-COND-01.
+        let force_warnings: Vec<WarningEntry> = if should_force_sync_engine(target_cl.as_deref(), include_engine) {
+            let step = StepScope::new("forceSync");
+            let force_cancel = CancellationToken::new();
+            self.process_manager
+                .set_cancel_token(force_cancel.clone())
+                .await;
+            // AGG-18: capture the force-sync warnings; force-sync is non-fatal
+            // (returns Ok(((), Vec::new())) on its own failure path — D-06 spirit).
+            let (_, warnings) = self
+                .force_sync_engine_step(&workspace, &channel, force_cancel, &app)
+                .await
+                .unwrap_or(((), Vec::new()));
+            self.process_manager.clear_tracked().await;
+            step.done("");
+            warnings
+        } else {
+            info!("[sync] step=forceSync skipped (no target changelist, or engine opt-out)");
+            Vec::new()
+        };
+
+        // Step 4: GenerateProjectFiles
+        let step = StepScope::new("genProject");
+        if let Err(e) = self.gen_project(&workspace, &channel).await {
+            error!("[sync] step=genProject failed: {e}");
+            step.failed();
+            let _ = channel.send(SyncEvent::SyncFailed {
+                step: "genProject".to_string(),
+                error: e.to_string(),
+            });
+            let _ = app.emit(
+                "sync-state",
+                SyncStatePayload {
+                    state: "error".into(),
+                    step: Some("genProject".to_string()),
+                    error: Some(e.to_string()),
+                    files_synced: None,
+                    cl: None,
+                },
+            );
+            return Err(e);
+        }
+        step.done("");
+
+        // Use target_cl directly when specified — get_have_changelist would return
+        // the wrong CL because excluded paths (Binaries, etc.) remain at higher CLs
+        let cl = if target_cl.is_some() {
+            target_cl.clone()
+        } else {
+            self.p4.get_have_changelist(&workspace).await.ok().flatten()
+        };
+        info!(
+            "[sync] pipeline complete, cl={}, files={files_synced}",
+            cl.as_deref().unwrap_or("none")
+        );
+        // AGG-18 / AGG-19 / AGG-20: merge p4Sync + forceSync warnings (recap
+        // at 500 internally) and surface on SyncCompleted. Empty Vec when p4
+        // emitted no qualifying lines (Phase 14 silent-UI contract).
+        let merged = merge_warning_lists([p4_warnings, force_warnings]);
+        let _ = channel.send(SyncEvent::SyncCompleted {
+            changelist: cl.clone(),
+            files_synced,
+            warnings: merged,
+        });
+        let _ = app.emit(
+            "sync-state",
+            SyncStatePayload {
+                state: "completed".into(),
+                step: None,
+                error: None,
+                files_synced: Some(files_synced),
+                cl: cl.clone(),
+            },
+        );
+
+        // Update workspace with last sync info
+        let cl_for_update = cl.clone();
+        let _ = WorkspaceService::update(&app, &workspace_id, |ws| {
+            ws.last_sync_cl = cl_for_update;
+            ws.last_sync_time = Some(now_string());
+            ws.last_sync_file_count = Some(files_synced);
+        })
+        .await;
+
+        // Save history record after successful sync
+        if let Some(ref cl_value) = cl {
+            let elapsed_ms = pipeline_start.elapsed().as_millis() as u64;
+            let _ = HistoryService::save_record(
+                &app,
+                HistoryRecord {
+                    changelist: cl_value.clone(),
+                    timestamp: now_string(),
+                    file_count: files_synced,
+                    workspace_id: workspace_id.clone(),
+                    duration_ms: Some(elapsed_ms),
+                },
+            )
+            .await;
+        }
+
+        Ok(())
+    }
+
+    pub async fn rollback_pipeline(
+        &self,
+        workspace_id: String,
+        target_cl: String,
+        channel: CountingChannel,
+        app: AppHandle,
+    ) -> Result<(), AppError> {
+        if self.pipeline_running.swap(true, Ordering::SeqCst) {
+            return Err(AppError::Process(
+                "A sync pipeline is already running".into(),
+            ));
+        }
+
+        let result = self
+            .rollback_pipeline_inner(workspace_id, target_cl, channel, app)
+            .await;
+        self.pipeline_running.store(false, Ordering::SeqCst);
+        result
+    }
+
+    async fn rollback_pipeline_inner(
+        &self,
+        workspace_id: String,
+        target_cl: String,
+        channel: CountingChannel,
+        app: AppHandle,
+    ) -> Result<(), AppError> {
+        // Validate target_cl
+        validate_target_cl(&target_cl)?;
+
+        let workspace = WorkspaceService::get(&app, &workspace_id).await?;
+        let pipeline_start = std::time::Instant::now();
+
+        // Network pre-check (silent -- not a StepIndicator step)
+        info!("[sync] workspace={}", workspace.name);
+        let step = StepScope::new("networkCheck");
+        if let Err(e) = self.p4.check_connectivity(&workspace).await {
+            error!("[sync] step=networkCheck failed: {e}");
+            step.failed();
+            let _ = channel.send(SyncEvent::SyncFailed {
+                step: "networkCheck".to_string(),
+                error: e.to_string(),
+            });
+            let _ = app.emit(
+                "sync-state",
+                SyncStatePayload {
+                    state: "error".into(),
+                    step: Some("networkCheck".to_string()),
+                    error: Some(e.to_string()),
+                    files_synced: None,
+                    cl: None,
+                },
+            );
+            return Err(e);
+        }
+        step.done("");
+        let _ = app.emit(
+            "sync-state",
+            SyncStatePayload {
+                state: "syncing".into(),
+                step: None,
+                error: None,
+                files_synced: None,
+                cl: None,
+            },
+        );
+
+        // Step 1: Close UE Editor
+        let step = StepScope::new("closeUe");
+        if let Err(e) = self.close_ue(&channel).await {
+            step.failed();
+            let _ = channel.send(SyncEvent::SyncFailed {
+                step: "closeUe".to_string(),
+                error: e.to_string(),
+            });
+            let _ = app.emit(
+                "sync-state",
+                SyncStatePayload {
+                    state: "error".into(),
+                    step: Some("closeUe".to_string()),
+                    error: Some(e.to_string()),
+                    files_synced: None,
+                    cl: None,
+                },
+            );
+            return Err(e);
+        }
+        step.done("");
+
+        // Step 1b: Close Excel (releases write locks on .xlsx so p4 sync can update them)
+        let step = StepScope::new("closeExcel");
+        if let Err(e) = self.close_excel(&channel).await {
+            step.failed();
+            let _ = channel.send(SyncEvent::SyncFailed {
+                step: "closeExcel".to_string(),
+                error: e.to_string(),
+            });
+            let _ = app.emit(
+                "sync-state",
+                SyncStatePayload {
+                    state: "error".into(),
+                    step: Some("closeExcel".to_string()),
+                    error: Some(e.to_string()),
+                    files_synced: None,
+                    cl: None,
+                },
+            );
+            return Err(e);
+        }
+        step.done("");
+
+        // Step 2: p4 sync @CL (NO clean_dev_dir -- D-06)
+        let step = StepScope::new("p4Sync");
+        info!("[sync] target_cl={}", target_cl);
+        let cancel_token = CancellationToken::new();
+        self.process_manager
+            .set_cancel_token(cancel_token.clone())
+            .await;
+
+        let options = SyncOptions {
+            target_cl: Some(target_cl.clone()),
+            parallel_threads: workspace.parallel_threads,
+            exclusions: workspace.exclusions.clone(),
+            // Rollback ALWAYS syncs the engine — the engine version pinned to
+            // the target CL is part of rollback semantics (do NOT add a toggle
+            // param to start_rollback).
+            include_engine: true,
+        };
+
+        let files_result = self
+            .p4_sync(&workspace, &channel, cancel_token, &options, &app)
+            .await;
+        self.process_manager.clear_tracked().await;
+
+        if let Err(e) = files_result {
+            if matches!(e, AppError::Cancelled) {
+                step.cancelled();
+                let _ = channel.send(SyncEvent::SyncCancelled {
+                    step: "p4Sync".to_string(),
+                });
+                let _ = app.emit(
+                    "sync-state",
+                    SyncStatePayload {
+                        state: "cancelled".into(),
+                        step: None,
+                        error: None,
+                        files_synced: None,
+                        cl: None,
+                    },
+                );
+                return Ok(());
+            }
+            step.failed();
+            let _ = channel.send(SyncEvent::SyncFailed {
+                step: "p4Sync".to_string(),
+                error: e.to_string(),
+            });
+            let _ = app.emit(
+                "sync-state",
+                SyncStatePayload {
+                    state: "error".into(),
+                    step: Some("p4Sync".to_string()),
+                    error: Some(e.to_string()),
+                    files_synced: None,
+                    cl: None,
+                },
+            );
+            return Err(e);
+        }
+        let (files_synced, p4_warnings) = files_result.unwrap();
+        step.done(&format!("files_synced={files_synced}"));
+
+        // Step 2b: Force sync Engine files (non-fatal, per D-04)
+        let step = StepScope::new("forceSync");
+        let force_cancel = CancellationToken::new();
+        self.process_manager
+            .set_cancel_token(force_cancel.clone())
+            .await;
+        // AGG-18: rollback ALWAYS force-syncs (include_engine:true hardcoded),
+        // so the merge below always has both p4_warnings + force_warnings.
+        let (_, force_warnings) = self
+            .force_sync_engine_step(&workspace, &channel, force_cancel, &app)
+            .await
+            .unwrap_or(((), Vec::new()));
+        self.process_manager.clear_tracked().await;
+        step.done("");
+
+        // Step 3: GenerateProjectFiles
+        let step = StepScope::new("genProject");
+        if let Err(e) = self.gen_project(&workspace, &channel).await {
+            step.failed();
+            let _ = channel.send(SyncEvent::SyncFailed {
+                step: "genProject".to_string(),
+                error: e.to_string(),
+            });
+            let _ = app.emit(
+                "sync-state",
+                SyncStatePayload {
+                    state: "error".into(),
+                    step: Some("genProject".to_string()),
+                    error: Some(e.to_string()),
+                    files_synced: None,
+                    cl: None,
+                },
+            );
+            return Err(e);
+        }
+        step.done("");
+
+        let cl = Some(target_cl.clone());
+        // AGG-18 / AGG-19 / AGG-20: merge p4Sync + forceSync warnings and
+        // surface on SyncCompleted (same pure-fn merge as the forward path).
+        let merged = merge_warning_lists([p4_warnings, force_warnings]);
+        let _ = channel.send(SyncEvent::SyncCompleted {
+            changelist: cl.clone(),
+            files_synced,
+            warnings: merged,
+        });
+        let _ = app.emit(
+            "sync-state",
+            SyncStatePayload {
+                state: "completed".into(),
+                step: None,
+                error: None,
+                files_synced: Some(files_synced),
+                cl: cl.clone(),
+            },
+        );
+
+        // Update workspace with last sync info
+        let cl_for_update = cl.clone();
+        let _ = WorkspaceService::update(&app, &workspace_id, |ws| {
+            ws.last_sync_cl = cl_for_update;
+            ws.last_sync_time = Some(now_string());
+            ws.last_sync_file_count = Some(files_synced);
+        })
+        .await;
+
+        // Save history record after successful rollback
+        if let Some(ref cl_value) = cl {
+            let elapsed_ms = pipeline_start.elapsed().as_millis() as u64;
+            let _ = HistoryService::save_record(
+                &app,
+                HistoryRecord {
+                    changelist: cl_value.clone(),
+                    timestamp: now_string(),
+                    file_count: files_synced,
+                    workspace_id: workspace_id.clone(),
+                    duration_ms: Some(elapsed_ms),
+                },
+            )
+            .await;
+        }
+
+        Ok(())
+    }
+
+    pub async fn retry_step(
+        &self,
+        workspace_id: String,
+        step: String,
+        target_cl: Option<String>,
+        include_engine: bool,
+        channel: CountingChannel,
+        app: AppHandle,
+    ) -> Result<(), AppError> {
+        if self.pipeline_running.swap(true, Ordering::SeqCst) {
+            return Err(AppError::Process(
+                "A sync pipeline is already running".into(),
+            ));
+        }
+
+        let result = self
+            .retry_step_inner(workspace_id, step, target_cl, include_engine, channel, app)
+            .await;
+        self.pipeline_running.store(false, Ordering::SeqCst);
+        result
+    }
+
+    async fn retry_step_inner(
+        &self,
+        workspace_id: String,
+        step: String,
+        target_cl: Option<String>,
+        include_engine: bool,
+        channel: CountingChannel,
+        app: AppHandle,
+    ) -> Result<(), AppError> {
+        let workspace = WorkspaceService::get(&app, &workspace_id).await?;
+
+        match step.as_str() {
+            "closeUe" => {
+                let s = StepScope::new("closeUe");
+                match self.close_ue(&channel).await {
+                    Ok(()) => s.done(""),
+                    Err(e) => {
+                        s.failed();
+                        return Err(e);
+                    }
+                }
+            }
+            "closeExcel" => {
+                let s = StepScope::new("closeExcel");
+                match self.close_excel(&channel).await {
+                    Ok(()) => s.done(""),
+                    Err(e) => {
+                        s.failed();
+                        return Err(e);
+                    }
+                }
+            }
+            "cleanDevDir" => {
+                let s = StepScope::new("cleanDevDir");
+                match self.clean_dev_dir(&workspace, &channel).await {
+                    Ok(()) => s.done(""),
+                    Err(e) => {
+                        s.failed();
+                        return Err(e);
+                    }
+                }
+            }
+            "p4Sync" => {
+                let s = StepScope::new("p4Sync");
+                let options = SyncOptions {
+                    target_cl: target_cl.clone(),
+                    parallel_threads: workspace.parallel_threads,
+                    exclusions: workspace.exclusions.clone(),
+                    include_engine,
+                };
+                let cancel_token = CancellationToken::new();
+                self.process_manager
+                    .set_cancel_token(cancel_token.clone())
+                    .await;
+                let result = self
+                    .p4_sync(&workspace, &channel, cancel_token, &options, &app)
+                    .await;
+                self.process_manager.clear_tracked().await;
+                match result {
+                    Ok((n, _warnings)) => s.done(&format!("files_synced={n}")),
+                    Err(AppError::Cancelled) => {
+                        s.cancelled();
+                        return Err(AppError::Cancelled);
+                    }
+                    Err(e) => {
+                        s.failed();
+                        return Err(e);
+                    }
+                }
+            }
+            "genProject" => {
+                let s = StepScope::new("genProject");
+                match self.gen_project(&workspace, &channel).await {
+                    Ok(()) => s.done(""),
+                    Err(e) => {
+                        s.failed();
+                        return Err(e);
+                    }
+                }
+            }
+            "forceSync" => {
+                // Mirror the run_pipeline gate (quick-260713-kx6): if the engine
+                // was opted out, force-sync is a no-op even on explicit retry.
+                if !should_force_sync_engine(target_cl.as_deref(), include_engine) {
+                    info!("[sync] step=forceSync skipped on retry (no target changelist, or engine opt-out)");
+                } else {
+                    let s = StepScope::new("forceSync");
+                    let cancel_token = CancellationToken::new();
+                    self.process_manager
+                        .set_cancel_token(cancel_token.clone())
+                        .await;
+                    let _ = self
+                        .force_sync_engine_step(&workspace, &channel, cancel_token, &app)
+                        .await;
+                    self.process_manager.clear_tracked().await;
+                    s.done("");
+                }
+            }
+            _ => return Err(AppError::Process(format!("Unknown step: {}", step))),
+        }
+
+        Ok(())
+    }
+
+    async fn close_ue(&self, channel: &CountingChannel) -> Result<(), AppError> {
+        let _ = channel.send(SyncEvent::StepStarted {
+            step: "closeUe".to_string(),
+            description: "Checking for UE Editor...".to_string(),
+            sub_step: Some("check".to_string()),
+        });
+
+        // Use tasklist to find any UnrealEditor process (handles all variants).
+        // tasklist truncates long names but the PID column is always present.
+        let output = tokio::process::Command::new("tasklist")
+            .args(["/NH"])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .creation_flags(CREATE_NO_WINDOW)
+            .output()
+            .await
+            .map_err(AppError::ProcessSpawn)?;
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        for line in stdout.lines() {
+            if !line.contains("UnrealEditor") {
+                continue;
+            }
+            // Format: "name.exe    PID Console    N mem K"
+            let parts: Vec<&str> = line.split_whitespace().collect();
+            if parts.len() >= 2 {
+                let name = parts[0];
+                let pid = parts[1];
+                info!("[closeUe] found {name} (PID {pid}), killing...");
+                let kill_output = tokio::process::Command::new("taskkill")
+                    .args(["/F", "/T", "/PID", pid])
+                    .stdin(std::process::Stdio::null())
+                    .stdout(std::process::Stdio::piped())
+                    .stderr(std::process::Stdio::null())
+                    .creation_flags(CREATE_NO_WINDOW)
+                    .output()
+                    .await
+                    .map_err(AppError::ProcessSpawn)?;
+                if !kill_output.status.success() {
+                    let stderr = String::from_utf8_lossy(&kill_output.stderr);
+                    warn!("[closeUe] taskkill PID {pid} failed: {}", stderr.trim());
+                }
+            }
+        }
+
+        let _ = channel.send(SyncEvent::StepCompleted {
+            step: "closeUe".to_string(),
+            success: true,
+        });
+
+        Ok(())
+    }
+
+    async fn close_excel(&self, channel: &CountingChannel) -> Result<(), AppError> {
+        let _ = channel.send(SyncEvent::StepStarted {
+            step: "closeExcel".to_string(),
+            description: "Checking for Excel...".to_string(),
+            sub_step: Some("check".to_string()),
+        });
+
+        // Use tasklist to find any EXCEL.EXE process. tasklist prints the image
+        // name uppercase as EXCEL.EXE; a case-sensitive contains match is enough
+        // (mirrors close_ue's bare contains("UnrealEditor")).
+        let output = tokio::process::Command::new("tasklist")
+            .args(["/NH"])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .creation_flags(CREATE_NO_WINDOW)
+            .output()
+            .await
+            .map_err(AppError::ProcessSpawn)?;
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        for line in stdout.lines() {
+            if !line.contains("EXCEL.EXE") {
+                continue;
+            }
+            // Format: "name.exe    PID Console    N mem K"
+            let parts: Vec<&str> = line.split_whitespace().collect();
+            if parts.len() >= 2 {
+                let name = parts[0];
+                let pid = parts[1];
+                info!("[closeExcel] found {name} (PID {pid}), killing...");
+                let kill_output = tokio::process::Command::new("taskkill")
+                    .args(["/F", "/T", "/PID", pid])
+                    .stdin(std::process::Stdio::null())
+                    .stdout(std::process::Stdio::piped())
+                    .stderr(std::process::Stdio::null())
+                    .creation_flags(CREATE_NO_WINDOW)
+                    .output()
+                    .await
+                    .map_err(AppError::ProcessSpawn)?;
+                if !kill_output.status.success() {
+                    let stderr = String::from_utf8_lossy(&kill_output.stderr);
+                    warn!("[closeExcel] taskkill PID {pid} failed: {}", stderr.trim());
+                }
+            }
+        }
+
+        let _ = channel.send(SyncEvent::StepCompleted {
+            step: "closeExcel".to_string(),
+            success: true,
+        });
+
+        Ok(())
+    }
+
+    async fn clean_dev_dir(
+        &self,
+        workspace: &WorkspaceConfig,
+        channel: &CountingChannel,
+    ) -> Result<(), AppError> {
+        let _ = channel.send(SyncEvent::StepStarted {
+            step: "cleanDevDir".to_string(),
+            description: "Cleaning Dev Directory...".to_string(),
+            sub_step: Some("clean".to_string()),
+        });
+
+        // Find the project dir at root/<project> or root/UnrealEngine/<project>
+        let root = Path::new(&workspace.root_path);
+        let project_candidates = [
+            root.join(format!("UnrealEngine/{}", workspace.project_dir)),
+            root.join(&workspace.project_dir),
+        ];
+        let project_path = project_candidates
+            .iter()
+            .find(|p| p.exists())
+            .unwrap_or(&project_candidates[1]);
+
+        let devs_path = project_path.join("Content/Developers");
+
+        if devs_path.exists() {
+            let canonical_root = Path::new(&workspace.root_path)
+                .canonicalize()
+                .map_err(AppError::ProcessSpawn)?;
+
+            let mut entries = tokio::fs::read_dir(&devs_path)
+                .await
+                .map_err(AppError::ProcessSpawn)?;
+
+            while let Some(entry) = entries.next_entry().await.map_err(AppError::ProcessSpawn)? {
+                let entry_path = entry.path();
+                let file_name = entry_path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("");
+
+                if file_name == workspace.p4_user {
+                    continue;
+                }
+
+                let canonical_entry = match entry_path.canonicalize() {
+                    Ok(p) => p,
+                    Err(_) => continue,
+                };
+
+                if !canonical_entry.starts_with(&canonical_root) {
+                    continue;
+                }
+
+                if entry_path.is_dir() {
+                    tokio::fs::remove_dir_all(&entry_path)
+                        .await
+                        .map_err(AppError::ProcessSpawn)?;
+                }
+            }
+        }
+
+        let _ = channel.send(SyncEvent::StepCompleted {
+            step: "cleanDevDir".to_string(),
+            success: true,
+        });
+
+        Ok(())
+    }
+
+    async fn p4_sync(
+        &self,
+        workspace: &WorkspaceConfig,
+        channel: &CountingChannel,
+        cancel: CancellationToken,
+        options: &SyncOptions,
+        app: &AppHandle,
+    ) -> Result<(u64, Vec<WarningEntry>), AppError> {
+        let (description, sub_step) = match &options.target_cl {
+            Some(cl) => (format!("Syncing to CL #{}...", cl), "toCl"),
+            None => ("Syncing from Perforce...".to_string(), "all"),
+        };
+        let _ = channel.send(SyncEvent::StepStarted {
+            step: "p4Sync".to_string(),
+            description,
+            // Phase 18 (WIRE-02 / D-02): token mirrors the target_cl branch
+            // above — the CL number itself never rides the wire.
+            sub_step: Some(sub_step.to_string()),
+        });
+
+        let total = Arc::new(AtomicU64::new(0));
+
+        let ws = workspace.clone();
+        let total_clone = total.clone();
+        let options_clone = SyncOptions {
+            target_cl: options.target_cl.clone(),
+            parallel_threads: options.parallel_threads,
+            exclusions: options.exclusions.clone(),
+            include_engine: options.include_engine,
+        };
+        let cancel_clone = cancel.clone();
+
+        // Notify user that we're enumerating files (dry run phase)
+        let _ = channel.send(SyncEvent::Progress {
+            current: 0,
+            total: 0,
+            current_file: "Enumerating files...".to_string(),
+            bytes_done: None,
+            bytes_total: None,
+            bytes_rate: None,
+            percent: None,
+            phase: None,
+        });
+
+        // Run dry_run first to get total file count BEFORE starting sync
+        // This ensures Progress events during sync have accurate total for percentage display
+        // Timeout and cancellation are handled inside dry_run_sync
+        let pm_for_dry_run = self.process_manager.clone();
+        let dry_run_handle = tokio::spawn(async move {
+            let executor = P4Executor::new();
+            match executor
+                .dry_run_sync(&ws, &options_clone, cancel_clone, Some(pm_for_dry_run))
+                .await
+            {
+                Ok(count) => {
+                    info!("[dry_run] completed, total files: {count}");
+                    total_clone.store(count, Ordering::Relaxed);
+                }
+                Err(AppError::Cancelled) => warn!("[dry_run] cancelled"),
+                Err(e) => warn!("[dry_run] failed: {e}, progress total will be 0"),
+            }
+        });
+
+        // Await dry_run to complete before starting sync
+        if let Err(e) = dry_run_handle.await {
+            warn!("[dry_run] task join error: {e}");
+        }
+
+        // Early exit if cancelled during dry_run — no point starting the real sync
+        if cancel.is_cancelled() {
+            return Err(AppError::Cancelled);
+        }
+
+        // quick-260701-ep7: best-effort `p4 sync -N` denominator for the
+        // byte-level progress bar. Runs AFTER the -n count (which we already
+        // awaited) and NEVER gates the real sync: sync_n_total_bytes wraps the
+        // call in a 60s timeout and maps ALL failures to None, so the worst
+        // case is a 60s wait yielding a rate-only bar. T-ep7-02 / T-ep7-03.
+        // The parse outcome is logged at info inside the helper (the empirical-
+        // validation log for the denominator).
+        let bytes_total: Option<u64> = self.p4.sync_n_total_bytes(workspace, options).await;
+        if bytes_total.is_some() {
+            info!("[sync-N] denominator available — byte-level bar will show percentage");
+        } else {
+            info!("[sync-N] no denominator — byte bar will be rate-only (liveness proof)");
+        }
+
+        // quick-260630-srw: resolve the app log dir ONCE and thread it into
+        // the primary + force syncs so each matched file is appended to a
+        // per-run file sync-<run_id>.log in this dir. Best-effort: if the
+        // resolver errors, pass None and sync proceeds without file logging.
+        // Mirrors commands/log.rs:current_log_path's app_log_dir() resolution.
+        let sync_log_dir: Option<PathBuf> = app.path().app_log_dir().ok();
+
+        let sync_result = self
+            .p4
+            .sync(
+                workspace,
+                channel,
+                cancel,
+                options,
+                total.clone(),
+                Some(self.process_manager.clone()),
+                sync_log_dir.clone(),
+                bytes_total,
+            )
+            .await;
+
+        // Forward final total to frontend for completion state.
+        // Clamp: use max(dry_run_total, actual_synced) so the final progress
+        // event never shows current > total when the real sync outruns the
+        // dry-run estimate (e.g. new CLs landed between preview and actual sync).
+        let dry_run_total = total.load(Ordering::Relaxed);
+        let actual_count = sync_result.as_ref().map(|(n, _)| *n).unwrap_or(0);
+        let clamped_total = dry_run_total.max(actual_count);
+        if clamped_total > 0 {
+            let _ = channel.send(SyncEvent::Progress {
+                current: actual_count,
+                total: clamped_total,
+                current_file: String::new(),
+                bytes_done: None,
+                bytes_total: None,
+                bytes_rate: None,
+                percent: None,
+                phase: None,
+            });
+        }
+
+        let _ = channel.send(SyncEvent::StepCompleted {
+            step: "p4Sync".to_string(),
+            success: sync_result.is_ok(),
+        });
+
+        // AGG-18: propagate the tuple `(files_synced, warnings)` to the caller.
+        // On Err the orchestrator's Err arm drops warnings (D-06).
+        sync_result
+    }
+
+    /// Non-fatal force sync step for Engine subtree.
+    /// Always returns Ok — logs and reports status but cannot fail the pipeline (per D-07).
+    /// Phase 13 AGG-18: returns `((), warnings)` on success; on Err (force-sync non-fatal
+    /// failure), returns `Ok(((), Vec::new()))` — warnings dropped consistent with D-06.
+    async fn force_sync_engine_step(
+        &self,
+        workspace: &WorkspaceConfig,
+        channel: &CountingChannel,
+        cancel: CancellationToken,
+        app: &AppHandle,
+    ) -> Result<((), Vec<WarningEntry>), AppError> {
+        // quick-260630-srw: resolve the per-run sync log dir here so force-sync
+        // appends to the SAME sync-<run_id>.log the primary sync wrote (run_id
+        // is shared via the task_local RUN_ID scope). Best-effort: None on
+        // resolver error — force-sync proceeds without file logging.
+        let sync_log_dir: Option<PathBuf> = app.path().app_log_dir().ok();
+
+        let _ = channel.send(SyncEvent::StepStarted {
+            step: "forceSync".to_string(),
+            description: "Force syncing Engine files...".to_string(),
+            sub_step: Some("force".to_string()),
+        });
+
+        match self
+            .p4
+            .force_sync_engine(
+                workspace,
+                channel,
+                cancel,
+                Some(self.process_manager.clone()),
+                sync_log_dir,
+            )
+            .await
+        {
+            Ok(((), warnings)) => {
+                let _ = channel.send(SyncEvent::StepCompleted {
+                    step: "forceSync".to_string(),
+                    success: true,
+                });
+                Ok(((), warnings))
+            }
+            Err(e) => {
+                warn!("[forceSync] failed (non-fatal): {e}");
+                let _ = channel.send(SyncEvent::LogLine {
+                    line: format!("Force sync warning (non-fatal): {e}"),
+                    stream: "stderr".to_string(),
+                });
+                let _ = channel.send(SyncEvent::StepCompleted {
+                    step: "forceSync".to_string(),
+                    success: false,
+                });
+                // D-06 spirit: force-sync failure drops warnings (the step's
+                // own error message is already surfaced as a LogLine above).
+                Ok(((), Vec::new()))
+            }
+        }
+    }
+
+    async fn gen_project(
+        &self,
+        workspace: &WorkspaceConfig,
+        channel: &CountingChannel,
+    ) -> Result<(), AppError> {
+        let _ = channel.send(SyncEvent::StepStarted {
+            step: "genProject".to_string(),
+            description: "Generating project files...".to_string(),
+            sub_step: Some("gen".to_string()),
+        });
+
+        // GenerateProjectFiles.bat lives in the UnrealEngine/ subdirectory
+        let root = Path::new(&workspace.root_path);
+        let bat_path = root.join("UnrealEngine/GenerateProjectFiles.bat");
+        let work_dir = root.join("UnrealEngine");
+        info!(
+            "[genProject] bat_path={}, work_dir={}",
+            bat_path.display(),
+            work_dir.display()
+        );
+
+        if !bat_path.exists() {
+            error!("[genProject] bat file not found: {}", bat_path.display());
+            return Err(AppError::CommandFailed {
+                step: "genProject".to_string(),
+                exit_code: None,
+            });
+        }
+
+        let mut child = tokio::process::Command::new("cmd")
+            .args(["/C", &bat_path.to_string_lossy()])
+            .current_dir(&work_dir)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .creation_flags(CREATE_NO_WINDOW)
+            .spawn()
+            .map_err(AppError::ProcessSpawn)?;
+
+        // Track the cmd process PID so stop_all can kill it
+        if let Some(id) = child.id() {
+            self.process_manager.track_pid(id).await;
+        }
+
+        use tokio::io::{AsyncBufReadExt, BufReader};
+        let stdout = child.stdout.take().unwrap();
+        let stderr = child.stderr.take().unwrap();
+
+        let ch_out = channel.clone();
+        let stdout_task = tokio::spawn(async move {
+            let mut lines = BufReader::new(stdout).lines();
+            let mut log_buf: Vec<String> = Vec::with_capacity(256);
+            let mut last_log_flush = std::time::Instant::now();
+            while let Ok(Some(line)) = lines.next_line().await {
+                log_buf.push(line);
+                let should_flush_log = log_buf.len() >= 500
+                    || last_log_flush.elapsed() >= std::time::Duration::from_millis(200);
+                if should_flush_log {
+                    let batch = std::mem::take(&mut log_buf);
+                    let _ = ch_out.send(SyncEvent::LogBatch {
+                        lines: batch,
+                        stream: "stdout".to_string(),
+                    });
+                    last_log_flush = std::time::Instant::now();
+                }
+            }
+            if !log_buf.is_empty() {
+                let _ = ch_out.send(SyncEvent::LogBatch {
+                    lines: log_buf,
+                    stream: "stdout".to_string(),
+                });
+            }
+            // D-05 (Phase 12 / HOTUI-12): per-completion counter summary for the
+            // genProject stdout drain — ONE line per drain per run, O(1).
+            // log_enabled! guard mandatory (HOTUI-13 eager-eval rule).
+            if log::log_enabled!(log::Level::Debug) {
+                crate::utils::log::debug!(
+                    "ipc.channel drain complete stream=stdout sent_total={}",
+                    ch_out.count()
+                );
+            }
+        });
+
+        let ch_err = channel.clone();
+        let stderr_task = tokio::spawn(async move {
+            let mut lines = BufReader::new(stderr).lines();
+            let mut log_buf: Vec<String> = Vec::with_capacity(64);
+            let mut last_log_flush = std::time::Instant::now();
+            while let Ok(Some(line)) = lines.next_line().await {
+                log_buf.push(line);
+                let should_flush_log = log_buf.len() >= 500
+                    || last_log_flush.elapsed() >= std::time::Duration::from_millis(200);
+                if should_flush_log {
+                    let batch = std::mem::take(&mut log_buf);
+                    let _ = ch_err.send(SyncEvent::LogBatch {
+                        lines: batch,
+                        stream: "stderr".to_string(),
+                    });
+                    last_log_flush = std::time::Instant::now();
+                }
+            }
+            if !log_buf.is_empty() {
+                let _ = ch_err.send(SyncEvent::LogBatch {
+                    lines: log_buf,
+                    stream: "stderr".to_string(),
+                });
+            }
+            // D-05 (Phase 12 / HOTUI-12): genProject stderr per-completion
+            // counter summary — ONE line per drain per run.
+            if log::log_enabled!(log::Level::Debug) {
+                crate::utils::log::debug!(
+                    "ipc.channel drain complete stream=stderr sent_total={}",
+                    ch_err.count()
+                );
+            }
+        });
+
+        let status = child.wait().await.map_err(AppError::ProcessSpawn)?;
+        self.process_manager.clear_tracked().await;
+
+        // Abort stdout/stderr reader tasks instead of awaiting them.
+        // GenerateProjectFiles.bat invokes MSBuild with /nodeReuse:true, which
+        // spawns dotnet.exe server processes that inherit the pipe handles and
+        // stay alive indefinitely.  Awaiting the reader tasks would hang
+        // forever because BufReader::lines() never sees EOF while those
+        // servers hold the pipes open.  By this point the actual batch process
+        // has exited and all meaningful output has already been sent.
+        stdout_task.abort();
+        stderr_task.abort();
+
+        if !status.success() {
+            let _ = channel.send(SyncEvent::StepCompleted {
+                step: "genProject".to_string(),
+                success: false,
+            });
+            return Err(AppError::CommandFailed {
+                step: "genProject".to_string(),
+                exit_code: status.code(),
+            });
+        }
+
+        let _ = channel.send(SyncEvent::StepCompleted {
+            step: "genProject".to_string(),
+            success: true,
+        });
+
+        Ok(())
+    }
+}
+
+fn now_string() -> String {
+    chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string()
+}
+
+/// Check if a step name is a known/retryable pipeline step.
+/// Used to validate retry requests without needing a full app harness.
+pub fn is_known_step(step: &str) -> bool {
+    matches!(
+        step,
+        "closeUe" | "closeExcel" | "cleanDevDir" | "p4Sync" | "forceSync" | "genProject"
+    )
+}
+
+/// Whether the Engine force-sync step should run. Mirrors the normal-sync
+/// engine gate in `p4_executor::build_p4_sync_args`
+/// (`workspace_root_scope = target_cl.is_some() && options.include_engine`):
+/// the engine is touched only when BOTH a Target CL is set AND the user opted
+/// into syncing the engine. Rollback constructs `include_engine: true`, so it
+/// always qualifies. When false, the engine's git-tracked source is left
+/// untouched so the post-sync `git pull` of UnrealEngine stays clean
+/// (quick-260713-kx6 — previously force-sync ran on `target_cl.is_some()`
+/// alone, undoing the normal-sync opt-out).
+pub fn should_force_sync_engine(target_cl: Option<&str>, include_engine: bool) -> bool {
+    target_cl.is_some() && include_engine
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_should_force_sync_engine() {
+        // No Target CL → never force-sync (normal HEAD sync unchanged).
+        assert!(!should_force_sync_engine(None, true));
+        assert!(!should_force_sync_engine(None, false));
+        // Target CL + engine opt-out → SKIP. This is the regression the helper
+        // exists for: force-sync used to run whenever target_cl.is_some(),
+        // undoing the normal-sync opt-out and re-overwriting git-tracked engine
+        // source (the git-pull stash-pop conflict the toggle is meant to avoid).
+        assert!(!should_force_sync_engine(Some("12345"), false));
+        // Target CL + opt-in → force-sync runs (pins engine source to the CL).
+        assert!(should_force_sync_engine(Some("12345"), true));
+    }
+
+    #[test]
+    fn test_is_known_step_all_valid() {
+        assert!(is_known_step("closeUe"));
+        assert!(is_known_step("closeExcel"));
+        assert!(is_known_step("cleanDevDir"));
+        assert!(is_known_step("p4Sync"));
+        assert!(is_known_step("forceSync"));
+        assert!(is_known_step("genProject"));
+    }
+
+    #[test]
+    fn test_is_known_step_rejects_unknown() {
+        assert!(!is_known_step("unknown"));
+        assert!(!is_known_step("networkCheck"));
+        assert!(!is_known_step(""));
+        assert!(!is_known_step("FORCE"));
+    }
+
+    /// WIRE-03 serde-shape pin: the structured payload serializes with EXACTLY
+    /// the keys state/step/error/files_synced/cl (snake_case, no retired
+    /// field remnant, no camelCase renaming, Some fields never skipped). The
+    /// Deserialize mirror in tray_manager.rs must match this shape
+    /// field-for-field — mirror drift between the two private structs is
+    /// invisible to cargo check, so this test is the only automated
+    /// tripwire (18-VALIDATION Wave 0 gap).
+    #[test]
+    fn sync_state_payload_serializes_exactly_the_machine_fields() {
+        let payload = SyncStatePayload {
+            state: "error".to_string(),
+            step: Some("p4Sync".to_string()),
+            error: Some("boom".to_string()),
+            files_synced: Some(42),
+            cl: Some("1234567".to_string()),
+        };
+        let value = serde_json::to_value(&payload).expect("serialize payload");
+        let map = value.as_object().expect("payload is a JSON object");
+        let mut keys: Vec<&str> = map.keys().map(String::as_str).collect();
+        keys.sort_unstable();
+        assert_eq!(keys, vec!["cl", "error", "files_synced", "state", "step"]);
+        assert_eq!(map.get("state"), Some(&serde_json::json!("error")));
+        assert_eq!(map.get("step"), Some(&serde_json::json!("p4Sync")));
+        assert_eq!(map.get("error"), Some(&serde_json::json!("boom")));
+        assert_eq!(map.get("files_synced"), Some(&serde_json::json!(42)));
+        assert_eq!(map.get("cl"), Some(&serde_json::json!("1234567")));
+        // The retired prose field must never reappear on the wire.
+        assert_eq!(map.len(), 5);
+    }
+
+    /// None-valued machine fields serialize as JSON null (no
+    /// skip_serializing_if on this struct) — the tray mirror treats null
+    /// exactly like an absent field via Option's default deserialization.
+    #[test]
+    fn sync_state_payload_none_fields_serialize_as_null_not_skipped() {
+        let payload = SyncStatePayload {
+            state: "syncing".to_string(),
+            step: None,
+            error: None,
+            files_synced: None,
+            cl: None,
+        };
+        let value = serde_json::to_value(&payload).expect("serialize payload");
+        let map = value.as_object().expect("payload is a JSON object");
+        assert_eq!(
+            map.get("step"),
+            Some(&serde_json::Value::Null),
+            "None must serialize as null (never skipped) so the key set is stable"
+        );
+        assert_eq!(map.get("files_synced"), Some(&serde_json::Value::Null));
+        assert_eq!(map.get("cl"), Some(&serde_json::Value::Null));
+    }
+}

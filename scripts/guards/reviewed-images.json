@@ -1,0 +1,130 @@
+[
+  {
+    "path": "docs/screenshot-history.png",
+    "sha256": "d88d1f9f7d9bc534e1cb8d9bf98b83aea197a06c8a3143bc9fbf386351a4af77"
+  },
+  {
+    "path": "docs/screenshot-idle.png",
+    "sha256": "a640220fa7917faec4ae6908429884b26cd6775d01a1b7255b154135eb19b3d0"
+  },
+  {
+    "path": "docs/screenshot-light.png",
+    "sha256": "1fe8c519d76d9eab37043973fd91b24e253d0866ad4c602634dc9f79cf01881e"
+  },
+  {
+    "path": "docs/screenshot-narrow.png",
+    "sha256": "72c2936386ab90dbab511139a7ec2192d6eb94ec9f21d8d51891ed901a1db37e"
+  },
+  {
+    "path": "docs/screenshot-running.png",
+    "sha256": "f22ac92d23d4ec018b881b8988502ed35ca6d0e342856d13dee1f533566ba545"
+  },
+  {
+    "path": "src-tauri/icons/128x128.png",
+    "sha256": "adceb91c15ff8b5abc7a43fcbe0d8311092b31fe725bd6491322f392c4b65a22"
+  },
+  {
+    "path": "src-tauri/icons/128x128@2x.png",
+    "sha256": "42624f16a53704c6df05871618bcac5890dbab2fd223e7a4f282452f0ce25d00"
+  },
+  {
+    "path": "src-tauri/icons/32x32.png",
+    "sha256": "cd69e99a67b03798b8adbdaa7e2a1e8bdbb6052c240987f37bf103f1c5b5b45d"
+  },
+  {
+    "path": "src-tauri/icons/icon.ico",
+    "sha256": "17b11e67fbbc41079120a8f3736b2321d180f2192347c3e6b29ed154a453a0f3"
+  },
+  {
+    "path": "tests/visual/baselines/add.png",
+    "sha256": "74ebcf60fda8dc1a8366dee411a922f2dd8f56f1125417970c05c7896bf8d6be"
+  },
+  {
+    "path": "tests/visual/baselines/app-settings.png",
+    "sha256": "d8097f750356e96411f0bd4c0f1264e6d08f9e142189678fa9e7ed8fcc12aeea"
+  },
+  {
+    "path": "tests/visual/baselines/git-running.png",
+    "sha256": "db7b11854ab631ec7bbb1f6148bcc840c90b72fa02354938bef69214471b7db4"
+  },
+  {
+    "path": "tests/visual/baselines/health.png",
+    "sha256": "9292ce559c36ab25298393f617498c8712882c8c997ca918a3277b17227f4793"
+  },
+  {
+    "path": "tests/visual/baselines/history.png",
+    "sha256": "cd4ec5215bcf36bb76f93270e093f29061ab594c0b90f8861abe03c891cb9974"
+  },
+  {
+    "path": "tests/visual/baselines/idle.png",
+    "sha256": "4ddb702c1c2caa78dd3dc41044e922ce0963177744e88fa574a0228786e8253b"
+  },
+  {
+    "path": "tests/visual/baselines/light.png",
+    "sha256": "cceee12d482c1caa0b2eb17d551071bfbbde1aeb86828d326bd2bbfb553d334e"
+  },
+  {
+    "path": "tests/visual/baselines/narrow.png",
+    "sha256": "1001d1b323e2b2a6077c6f3a1eab1165db1533e21cb4916e2fcfd5e8e7afcf74"
+  },
+  {
+    "path": "tests/visual/baselines/rollback.png",
+    "sha256": "e9bbd48c7e226440c68c7e7fff3369f1845ac786c65b9be878590313e46be0e7"
+  },
+  {
+    "path": "tests/visual/baselines/running.png",
+    "sha256": "b461d8f23c949cbd9fd18758827928526ef63f6d51d19542ac75e15e0ed2de52"
+  },
+  {
+    "path": "tests/visual/baselines/settings.png",
+    "sha256": "474c2f83b802b6ababe1f7b2c0952effcedc255e5e32c77248a947877651ebad"
+  },
+  {
+    "path": "tests/visual/baselines/target.png",
+    "sha256": "a66c0929677f8c248b84be4a4a06100bef8e0cddc1e4350288cbc7775a04b576"
+  },
+  {
+    "path": "tests/visual/canonical/ugs-code-add.png",
+    "sha256": "86e3e33d24c8ab5542f01da366c69c0eb971221fbf09188c03f50c8b93157355"
+  },
+  {
+    "path": "tests/visual/canonical/ugs-code-app-settings.png",
+    "sha256": "e9625852a999b94bd28a5884953dede7e9ae0f62f1faeba736ae2b7edfe7c49a"
+  },
+  {
+    "path": "tests/visual/canonical/ugs-code-health.png",
+    "sha256": "bd59a048d8696e0576023e065fec4e27dddc933a5a37a7ce77ac050ef30f8c15"
+  },
+  {
+    "path": "tests/visual/canonical/ugs-code-history.png",
+    "sha256": "d0dd52954e18275d236e76f32b2c51cf63f929e2d87a539f6dd4e1d51b3b48cc"
+  },
+  {
+    "path": "tests/visual/canonical/ugs-code-idle.png",
+    "sha256": "12d0a20b8caa8b4a8e0f1a764f432a6d47588ab503a210604a3a7e524e12b96b"
+  },
+  {
+    "path": "tests/visual/canonical/ugs-code-light.png",
+    "sha256": "759cb38aacd259afc633e7ca7283b6ab32e3279318b4eb290e5104697db3ce42"
+  },
+  {
+    "path": "tests/visual/canonical/ugs-code-narrow.png",
+    "sha256": "b8b62348c862c1c5618da8d24eed83c6a5b994b12317633f1d6913b985dce92d"
+  },
+  {
+    "path": "tests/visual/canonical/ugs-code-rollback.png",
+    "sha256": "d36aaa02e787b27bd45e5c01aafc9162722027507ba40bb18a614358a1de3e89"
+  },
+  {
+    "path": "tests/visual/canonical/ugs-code-running.png",
+    "sha256": "98f1f725904081470e16c1ecb1546bf71ec4d82ea9e5b0d923f6012d05e7fba0"
+  },
+  {
+    "path": "tests/visual/canonical/ugs-code-settings.png",
+    "sha256": "72b4710fc43565a494469a2049a1dc5f969803a4020150ae6052831360f39072"
+  },
+  {
+    "path": "tests/visual/canonical/ugs-code-target.png",
+    "sha256": "3f7f90f3d6aa6592247f078953f1de6948907f4335b80d61f936bfd706892ad8"
+  }
+]

@@ -1,0 +1,157 @@
+@import "tailwindcss";
+
+/* Phase 24 (SHELL-01, D-01/D-02): semantic light/dark token layer.
+ *
+ * Architecture (24-RESEARCH Q4, verified against installed tailwindcss 4.3.0):
+ * - :root defines every semantic pair as light-dark(LIGHT, DARK), values
+ *   VERBATIM from the canonical design contract (tests/visual/canonical/
+ *   ugs-code-preview-check.html lines 1040-1041, the --uc-* token set).
+ * - @theme inline maps Tailwind utility names onto those vars WITHOUT
+ *   emitting --color-* custom properties, so bg-background compiles to
+ *   var(--background) and a color-scheme flip repaints every consumer in
+ *   place — CSS-only, no React theme state exists (D-02).
+ * - color-scheme: light dark is REQUIRED for light-dark() to switch; without
+ *   it tokens silently stick (research Pitfall 1).
+ */
+
+/* Inclusive contract breakpoints (canonical @media (max-width:850px/620px),
+ * canonical lines 1175-1178). The builtin max-[N]: variant is EXCLUSIVE
+ * (width < N) — off-by-one at exactly 850/620 — so the contract breakpoints
+ * are custom variants (research Q-breakpoint). */
+@custom-variant medium (@media (max-width: 850px));
+@custom-variant narrow (@media (max-width: 620px));
+
+@theme inline {
+  /* Utility bridge: semantic colors -> :root light-dark() vars. Existing
+   * bg-background/text-foreground/border-border classes across the component
+   * tree keep compiling — CSS-layer migration, zero class rewrite (D-01). */
+  --color-background: var(--background);
+  --color-sidebar: var(--sidebar);
+  --color-card: var(--card);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-well: var(--well);
+  --color-foreground: var(--foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-ring: var(--ring);
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --color-warning-surface: var(--warning-surface);
+  --color-destructive: var(--destructive);
+  --color-destructive-surface: var(--destructive-surface);
+  --color-info: var(--info);
+
+  /* Radii (canonical app scale). */
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --radius-xl: 9px;
+
+  /* Canonical type scale — NAMED tokens only. Tailwind default size tokens
+   * are NOT remapped (text-sm stays 14px, root font-size stays 16px as the
+   * rem anchor); surfaces adopt these in Phases 25-28 (UI-SPEC Typography,
+   * research Pitfall 2 / assumption A3). */
+  --text-caption: 11px;
+  --text-caption--line-height: 1.5;
+  --text-note: 12px;
+  --text-control: 13px;
+  --text-control--line-height: 1.5;
+  --text-body: 14px;
+  --text-body--line-height: 1.5;
+  --text-section: 17px;
+  --text-section--line-height: 1.4;
+  --text-section--font-weight: 500;
+  --text-page: 22px;
+  --text-page--line-height: 1.3;
+  --text-page--letter-spacing: -0.5px;
+  --text-progress: 25px;
+  --text-progress--letter-spacing: -0.6px;
+
+  /* Weights: exactly two (canonical uses only these two). */
+  --font-weight-regular: 400;
+  --font-weight-medium: 500;
+
+  /* Canonical .uc-mono mono stack. */
+  --font-mono: Consolas, "Courier New", monospace;
+}
+
+:root {
+  color-scheme: light dark;
+  font-family: "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+
+  /* Semantic light-dark() pairs — the 16 --uc-* color pairs plus the
+   * foreground/surface derivations from the UI-SPEC Color Contract table,
+   * values copied verbatim from canonical lines 1040-1041. */
+  --background: light-dark(#f5f6f8,#15181b);
+  --sidebar: light-dark(#eceff2,#1a1e22);
+  --card: light-dark(#ffffff,#20252a);
+  --popover: light-dark(#ffffff,#20252a);
+  --secondary: light-dark(#ffffff,#20252a);
+  --secondary-foreground: light-dark(#222b32,#edf1f4);
+  --well: light-dark(#f1f3f5,#14181c);
+  --foreground: light-dark(#222b32,#edf1f4);
+  --muted: light-dark(#596772,#a5b1bc);
+  --border: light-dark(#d9dfe5,#343c44);
+  --input: light-dark(#d9dfe5,#343c44);
+  --primary: light-dark(#19794d,#79dca5);
+  --primary-foreground: light-dark(#ffffff,#122a1e);
+  --accent: light-dark(#e0eee6,#253c30);
+  --accent-foreground: light-dark(#222b32,#edf1f4);
+  --ring: light-dark(#19794d,#79dca5);
+  --success: light-dark(#197248,#79dca5);
+  --warning: light-dark(#85520d,#e8be79);
+  --warning-surface: light-dark(#fbefd9,#3a3020);
+  --destructive: light-dark(#b02e3d,#ff9ea8);
+  --destructive-surface: light-dark(#fae8eb,#3b252a);
+  --info: light-dark(#2869b8,#98bef5);
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+}
+
+body {
+  /* Canonical body base: 14px/1.5 on the Segoe UI stack (UI-SPEC Typography).
+   * @theme inline emits no --color-* custom properties (research Q4), so the
+   * body resolves the same token the bg-background utility compiles to. */
+  background: var(--background);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+button,
+input {
+  font: inherit;
+}
+
+@keyframes progress-indeterminate {
+  0% {
+    transform: translateX(-100%);
+  }
+  50% {
+    transform: translateX(250%);
+  }
+  100% {
+    transform: translateX(-100%);
+  }
+}
+
+.progress-indeterminate-indicator {
+  width: 35%;
+  animation: progress-indeterminate 1.5s ease-in-out infinite;
+}

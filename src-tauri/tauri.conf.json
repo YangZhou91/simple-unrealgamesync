@@ -1,0 +1,50 @@
+{
+  "$schema": "https://raw.githubusercontent.com/nickinchrisclass/tauri/feat-v2/core/tauri-config-schema/schema.json",
+  "productName": "Simple UnrealGameSync",
+  "version": "1.7.0",
+  "identifier": "com.simpleugs.app",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "Simple UnrealGameSync",
+        "width": 1100,
+        "height": 640,
+        "minWidth": 352,
+        "minHeight": 500,
+        "resizable": true,
+        "center": true,
+        "decorations": false,
+        "additionalBrowserArgs": "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --disable-background-timer-throttling --disable-renderer-backgrounding --disable-backgrounding-occluded-windows"
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis", "msi"],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "createUpdaterArtifacts": true
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEIzNkIxN0NDNzQ2OTUzQzAKUldUQVUybDB6QmRycy9XZWRLTGpHN3lCalNGVWNDcEM2VkpWWVUxTTVOZmR6VGpVSko1ODFoYks=",
+      "endpoints": [
+        "https://github.com/YangZhou91/simple-unrealgamesync/releases/latest/download/latest.json"
+      ]
+    }
+  }
+}
