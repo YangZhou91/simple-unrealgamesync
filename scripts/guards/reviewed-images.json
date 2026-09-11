@@ -21,19 +21,31 @@
   },
   {
     "path": "src-tauri/icons/128x128.png",
-    "sha256": "adceb91c15ff8b5abc7a43fcbe0d8311092b31fe725bd6491322f392c4b65a22"
+    "sha256": "d8ad7449c4d1cd2335d9f3c042a5fcbea48e5da05a32bef1e43ec2568d180d70"
   },
   {
     "path": "src-tauri/icons/128x128@2x.png",
-    "sha256": "42624f16a53704c6df05871618bcac5890dbab2fd223e7a4f282452f0ce25d00"
+    "sha256": "9bc52e8552c5e3244ab58618b366ef5a359c1b3f88a81ffbeec8d6cb2a514c85"
   },
   {
     "path": "src-tauri/icons/32x32.png",
-    "sha256": "cd69e99a67b03798b8adbdaa7e2a1e8bdbb6052c240987f37bf103f1c5b5b45d"
+    "sha256": "e8c2916bd4dd2bdc5c6b5a93f2edbf0a7d8857adc71b231875a995c1e082d94a"
+  },
+  {
+    "path": "src-tauri/icons/icon-master.png",
+    "sha256": "f3c94dbfcfcea7b58332f3951f0e906ca00505a93ede87dd770607301d87d741"
+  },
+  {
+    "path": "src-tauri/icons/icon.icns",
+    "sha256": "60cfee3c99a1c89604fa4ae4bfb34c95d56a332dfbdeded4d96c3affffd867f3"
   },
   {
     "path": "src-tauri/icons/icon.ico",
-    "sha256": "17b11e67fbbc41079120a8f3736b2321d180f2192347c3e6b29ed154a453a0f3"
+    "sha256": "493144a6591a97d869a1d8d6e1022ed97190fd75b339398574e06e7dc4924a78"
+  },
+  {
+    "path": "src/assets/app-icon.png",
+    "sha256": "db76bed5bb9572b4cd09bf8835d007f391642c90188a2d784210745167f1f914"
   },
   {
     "path": "tests/visual/baselines/add.png",

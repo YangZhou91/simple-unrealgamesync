@@ -31,6 +31,11 @@ test("titlebar renders exactly once with the app title", async ({ page }) => {
   await gotoHarness(page);
 
   await expect(titlebar(page)).toHaveCount(1);
+  const brandIcon = titlebar(page).locator("[data-app-brand-icon]");
+  await expect(brandIcon).toHaveCount(1);
+  await expect(brandIcon).toHaveAttribute("src", /\S+/);
+  await expect(brandIcon).toHaveCSS("width", "16px");
+  await expect(brandIcon).toHaveCSS("height", "16px");
   // The title text is the shared APP_TITLE constant, identical both locales.
   await expect(
     titlebar(page).getByText("Simple UnrealGameSync"),

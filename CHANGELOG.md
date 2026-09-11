@@ -2,6 +2,12 @@
 
 All notable changes to Simple UnrealGameSync will be documented in this file.
 
+## [1.8.2] - 2026-09-11
+
+### Changed
+- **Unified application icon**: the Windows executable, installer, system tray, and custom titlebar now use the transparent mint sync-arrow design.
+- **Theme-safe icon rendering**: transparent margins and small-size tuning keep the icon clear on both light and dark backgrounds.
+
 ## [1.7.0] - 2026-09-08
 
 ### Added

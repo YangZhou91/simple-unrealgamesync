@@ -17,7 +17,8 @@
 // rounded-sm, focus ring via outline (canonical .btn:focus-visible
 // — outline 2px var(--color-ring), offset 2px).
 import { useMemo } from "react";
-import { Minus, RefreshCw, Square, X } from "lucide-react";
+import { Minus, Square, X } from "lucide-react";
+import appIcon from "@/assets/app-icon.png";
 import { useT } from "@/lib/i18n";
 import { APP_TITLE, getTitleBarControls } from "@/lib/windowControls";
 
@@ -33,7 +34,13 @@ export function AppTitleBar() {
       data-tauri-drag-region
       className="flex h-[34px] shrink-0 select-none items-center gap-[9px] border-b border-border bg-sidebar px-[14px] py-0 text-[11px] narrow:gap-[7px]"
     >
-      <RefreshCw className="h-4 w-4 shrink-0 text-success" aria-hidden />
+      <img
+        src={appIcon}
+        alt=""
+        aria-hidden
+        data-app-brand-icon
+        className="h-4 w-4 shrink-0"
+      />
       <span
         data-tauri-drag-region
         className="min-w-0 flex-1 truncate text-muted-foreground"
