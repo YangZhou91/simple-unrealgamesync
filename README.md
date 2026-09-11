@@ -14,11 +14,6 @@ just the sync workflow, no Swarm/metadata server required.
 <p align="center">
   <img src="docs/screenshot-running.png" alt="Running sync: five-step pipeline, byte-level progress bar, and live log stream" width="880" />
 </p>
-<p align="center">
-  <img src="docs/screenshot-narrow.png" alt="Narrow 392px layout: compact sidebar and stacked sync cards" width="330" />
-  <img height="10" aria-hidden="true" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg'/%3E" />
-  <img src="docs/screenshot-light.png" alt="Light theme idle dashboard" width="880" />
-</p>
 
 ## Features
 
