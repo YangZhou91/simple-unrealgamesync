@@ -49,31 +49,31 @@
   },
   {
     "path": "tests/visual/baselines/add.png",
-    "sha256": "74ebcf60fda8dc1a8366dee411a922f2dd8f56f1125417970c05c7896bf8d6be"
+    "sha256": "5e4d9a151cfecc7080a390fe097aeda15175173d26a45b32b0fedf1c2fc15edf"
   },
   {
     "path": "tests/visual/baselines/app-settings.png",
-    "sha256": "d8097f750356e96411f0bd4c0f1264e6d08f9e142189678fa9e7ed8fcc12aeea"
+    "sha256": "85c8f69fde955c0c3437146f15c6d45e87b27f2e64b9cdbaea1bd44714edea0c"
   },
   {
     "path": "tests/visual/baselines/git-running.png",
-    "sha256": "db7b11854ab631ec7bbb1f6148bcc840c90b72fa02354938bef69214471b7db4"
+    "sha256": "3a2756498e95695915ec662ac57990a70703ba55ac11810a2d8be365c8974f99"
   },
   {
     "path": "tests/visual/baselines/health.png",
-    "sha256": "9292ce559c36ab25298393f617498c8712882c8c997ca918a3277b17227f4793"
+    "sha256": "81ed13061db76fe6a2a2b0b809c9b496cb0d3496835706da7e3bcbd1f00cc63d"
   },
   {
     "path": "tests/visual/baselines/history.png",
-    "sha256": "cd4ec5215bcf36bb76f93270e093f29061ab594c0b90f8861abe03c891cb9974"
+    "sha256": "f719522d000c7a262a70ee8e583995217f952700bf01ebdb6508ae15acde1f2c"
   },
   {
     "path": "tests/visual/baselines/idle.png",
-    "sha256": "4ddb702c1c2caa78dd3dc41044e922ce0963177744e88fa574a0228786e8253b"
+    "sha256": "da7d9ea56e9b0821478f56bfc50776494a56abddedb4e4a15b9ce2b2c5dca18e"
   },
   {
     "path": "tests/visual/baselines/light.png",
-    "sha256": "cceee12d482c1caa0b2eb17d551071bfbbde1aeb86828d326bd2bbfb553d334e"
+    "sha256": "d574a245d33b2a97ac4ab3561a976f7f1da8e6018f45b50af0bfa2a068bc197f"
   },
   {
     "path": "tests/visual/baselines/narrow.png",
@@ -81,19 +81,19 @@
   },
   {
     "path": "tests/visual/baselines/rollback.png",
-    "sha256": "e9bbd48c7e226440c68c7e7fff3369f1845ac786c65b9be878590313e46be0e7"
+    "sha256": "553af836d80c2f0263d49d22524bc8ed0ec8484b978b79af24559be58f68f074"
   },
   {
     "path": "tests/visual/baselines/running.png",
-    "sha256": "b461d8f23c949cbd9fd18758827928526ef63f6d51d19542ac75e15e0ed2de52"
+    "sha256": "bbd5b531370649c5f1bb316bfb10a70c2c0d02d805f002f4020a958b21b087aa"
   },
   {
     "path": "tests/visual/baselines/settings.png",
-    "sha256": "474c2f83b802b6ababe1f7b2c0952effcedc255e5e32c77248a947877651ebad"
+    "sha256": "eb0ada98ab250e21fe5152ecb5f23d0c09b00eb640f3bcffd516b5320e6ffcf8"
   },
   {
     "path": "tests/visual/baselines/target.png",
-    "sha256": "a66c0929677f8c248b84be4a4a06100bef8e0cddc1e4350288cbc7775a04b576"
+    "sha256": "77679e9f181b104d958c2ca4bafd217d634a45ebc56380834f29b1e040c5b6f6"
   },
   {
     "path": "tests/visual/canonical/ugs-code-add.png",
