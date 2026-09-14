@@ -132,7 +132,7 @@ test("mount-identity-850: aside node survives crossing 850 both directions", asy
   await setViewportSize(page, 1056); // back above 850
   await settleResize(page);
   await expectSameAsideNode(page, handle);
-  await expect(page.locator("main")).toHaveCSS("padding-left", "0px");
+  await expect(page.locator("main")).toHaveCSS("padding-left", "24px");
 
   expectNoPageErrors(page);
 });

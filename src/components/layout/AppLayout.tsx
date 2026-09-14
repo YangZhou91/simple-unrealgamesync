@@ -146,7 +146,7 @@ export function AppLayout({ sidebar, children }: AppLayoutProps) {
           onKeyDown={handleKeyDown}
         />
       </aside>
-      <main className="flex min-w-0 flex-1 flex-col overflow-hidden medium:px-[18px] narrow:px-[14px]">{children}</main>
+      <main className="flex min-w-0 flex-1 flex-col overflow-hidden px-6 medium:px-[18px] narrow:px-[14px]">{children}</main>
     </div>
   );
 }
