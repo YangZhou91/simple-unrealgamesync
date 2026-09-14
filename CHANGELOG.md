@@ -2,6 +2,11 @@
 
 All notable changes to Simple UnrealGameSync will be documented in this file.
 
+## [1.8.6] - 2026-09-14
+
+### Fixed
+- **Workspace health**: find the real `*.uproject` on disk instead of assuming `{projectDir}.uproject`, and classify Perforce reconcile preview lines `opened for edit` / `opened for add` as modified / not-in-depot.
+
 ## [1.8.5] - 2026-09-14
 
 ### Fixed
