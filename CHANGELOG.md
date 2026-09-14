@@ -2,6 +2,11 @@
 
 All notable changes to Simple UnrealGameSync will be documented in this file.
 
+## [1.8.5] - 2026-09-14
+
+### Fixed
+- **Sync output panel**: live p4/UBT log lines paint again. The virtualized viewer had no definite width, so a populated log well stayed blank.
+
 ## [1.8.4] - 2026-09-14
 
 ### Changed
