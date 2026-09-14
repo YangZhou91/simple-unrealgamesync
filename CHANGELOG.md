@@ -2,6 +2,11 @@
 
 All notable changes to Simple UnrealGameSync will be documented in this file.
 
+## [1.8.3] - 2026-09-14
+
+### Fixed
+- **Desktop main-area padding**: at desktop width (>850px) the main content area regains its 24px horizontal padding — History and Workspace Health titles no longer sit flush against the window edges (the canonical base padding was lost during the shell migration).
+
 ## [1.8.2] - 2026-09-11
 
 ### Changed
