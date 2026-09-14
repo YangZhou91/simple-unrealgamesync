@@ -10,7 +10,7 @@ import {
 } from "@/components/ui/dialog";
 import { WorkspaceList } from "@/components/workspace/WorkspaceList";
 import { WorkspaceForm } from "@/components/workspace/WorkspaceForm";
-import { Database, Layers, Plus, RefreshCw, Settings } from "lucide-react";
+import { Layers, Plus, RefreshCw, Settings } from "lucide-react";
 import { useState, useEffect } from "react";
 import { getVersion } from "@tauri-apps/api/app";
 import { changelog } from "virtual:changelog";
@@ -153,26 +153,25 @@ export function Sidebar({
       {/* 24-03: footer compact row at <=620 (canonical .uc-side-footer:
           display:flex; align-items:center; justify-content:space-between;
           gap:8px; flex-wrap:wrap; margin-top:10px; no border). Chrome-only —
-          control content is Phase 25. */}
-      <div className="mt-auto border-t border-border px-4 pb-0 pt-4 narrow:flex narrow:items-center narrow:justify-between narrow:gap-2 narrow:flex-wrap narrow:mt-2 narrow:border-t-0 narrow:px-4 narrow:py-2">
+          control content is Phase 25.
+          260914-k7l: desktop base aligned with canonical .uc-side-footer
+          (dot-first, uniform 12px, 14px/8px row rhythm). */}
+      <div className="mt-auto border-t border-border px-4 pb-3 pt-3 narrow:flex narrow:items-center narrow:justify-between narrow:gap-2 narrow:flex-wrap narrow:mt-2 narrow:border-t-0 narrow:px-4 narrow:py-2">
         <Button
           variant="ghost"
           aria-label={t("workspace.sidebar.settingsAria")}
-          className="inline-flex h-8 gap-2 px-2 text-sm text-muted hover:text-foreground narrow:hidden"
+          className="inline-flex h-7 gap-2 px-0 text-xs text-muted hover:text-foreground narrow:hidden"
           disabled={isSettingsDisabled}
           onClick={onOpenSettings}
         >
           <Settings className="h-4 w-4" />
           {t("workspace.sidebar.settingsAria")}
         </Button>
-        <div className="mb-2 flex items-center justify-between text-[10px] text-muted-foreground narrow:mb-0">
-          <span className="flex items-center gap-1.5">
-            <Database className="h-3 w-3" />
-            {t("workspace.sidebar.perforceReady")}
-          </span>
+        <div className="mt-3.5 flex items-center gap-2 text-xs text-muted-foreground narrow:mt-0">
           <span className="h-1.5 w-1.5 rounded-full bg-success" aria-label={t("workspace.sidebar.connectedAria")} />
+          {t("workspace.sidebar.perforceReady")}
         </div>
-        <div className="flex items-center justify-between gap-1">
+        <div className="mt-2 flex items-center justify-between gap-1 narrow:mt-0">
           <Button
             variant="ghost"
             size="icon"
