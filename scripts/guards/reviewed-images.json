@@ -49,51 +49,51 @@
   },
   {
     "path": "tests/visual/baselines/add.png",
-    "sha256": "5e4d9a151cfecc7080a390fe097aeda15175173d26a45b32b0fedf1c2fc15edf"
+    "sha256": "0831a1d3a1c5376897e172d9dc52f35158999da2b9f3382c9e03b6d56adb2a9e"
   },
   {
     "path": "tests/visual/baselines/app-settings.png",
-    "sha256": "85c8f69fde955c0c3437146f15c6d45e87b27f2e64b9cdbaea1bd44714edea0c"
+    "sha256": "8b09c64bd9ec6664c311d0aecfb61178e94990b53057f6e3aa465e24636bc474"
   },
   {
     "path": "tests/visual/baselines/git-running.png",
-    "sha256": "3a2756498e95695915ec662ac57990a70703ba55ac11810a2d8be365c8974f99"
+    "sha256": "6fcc3731529730d386ff73897f2e1129eefc118c3d6ca7e87699d6f2044ed7f2"
   },
   {
     "path": "tests/visual/baselines/health.png",
-    "sha256": "81ed13061db76fe6a2a2b0b809c9b496cb0d3496835706da7e3bcbd1f00cc63d"
+    "sha256": "e98daf35bc2e9a7c98cf7cc18f3e46d15218ccfc09d3060e4bc72744e12ee8df"
   },
   {
     "path": "tests/visual/baselines/history.png",
-    "sha256": "f719522d000c7a262a70ee8e583995217f952700bf01ebdb6508ae15acde1f2c"
+    "sha256": "0d03782de37cbcc323370bcc57118bd358e76e6045dc2b31004e2e09e5bc9264"
   },
   {
     "path": "tests/visual/baselines/idle.png",
-    "sha256": "da7d9ea56e9b0821478f56bfc50776494a56abddedb4e4a15b9ce2b2c5dca18e"
+    "sha256": "fca1eb8605249fd1cdd0fbb61c65d4485a569c0806f6840d9936bf6680217652"
   },
   {
     "path": "tests/visual/baselines/light.png",
-    "sha256": "d574a245d33b2a97ac4ab3561a976f7f1da8e6018f45b50af0bfa2a068bc197f"
+    "sha256": "8f58af9113dffd46e6ea00390abd65d8ac6beba23988fbb568bb0075f0ab06e6"
   },
   {
     "path": "tests/visual/baselines/narrow.png",
-    "sha256": "1001d1b323e2b2a6077c6f3a1eab1165db1533e21cb4916e2fcfd5e8e7afcf74"
+    "sha256": "ac37d30215eed63168a519c336cd070f2b689773ed0e1b53edd238bdf169dca5"
   },
   {
     "path": "tests/visual/baselines/rollback.png",
-    "sha256": "553af836d80c2f0263d49d22524bc8ed0ec8484b978b79af24559be58f68f074"
+    "sha256": "68826ff3493e1bc5756ceee052eba2bc949ee960210e2a6c2c8d0438c386bd8a"
   },
   {
     "path": "tests/visual/baselines/running.png",
-    "sha256": "bbd5b531370649c5f1bb316bfb10a70c2c0d02d805f002f4020a958b21b087aa"
+    "sha256": "3d0efe6039d1f6dad72c9572b6d17c11f248bacb1f6376214defc670d621ee15"
   },
   {
     "path": "tests/visual/baselines/settings.png",
-    "sha256": "eb0ada98ab250e21fe5152ecb5f23d0c09b00eb640f3bcffd516b5320e6ffcf8"
+    "sha256": "ebfde78ed6200c780ae151ef6a1f694cb7e85449e14d5e3dcf289fca37c8d723"
   },
   {
     "path": "tests/visual/baselines/target.png",
-    "sha256": "77679e9f181b104d958c2ca4bafd217d634a45ebc56380834f29b1e040c5b6f6"
+    "sha256": "168c86cd8b69972934114a47a7de84a653470ede342a932b6b46c07800ff9e90"
   },
   {
     "path": "tests/visual/canonical/ugs-code-add.png",
