@@ -1702,7 +1702,7 @@ impl P4Executor {
         // terminal `done`/`failed`/`cancelled`/`dropped` line on every path.
         let _audit_scope = StepScope::new("audit");
 
-        // Build the FIXED 3-entry whitelist (Config/..., Source/..., .uproject).
+        // Build the whitelist (Config/..., Source/..., plus on-disk *.uproject).
         let whitelist = build_audit_whitelist_args(&workspace.root_path, &workspace.project_dir);
         let whitelist_refs: Vec<&str> = whitelist.iter().map(|s| s.as_str()).collect();
 
@@ -2375,13 +2375,18 @@ pub struct WorkspaceHealthReport {
 }
 
 /// `p4 reconcile -n -l` action markers, in the order reconcile emits them.
-/// Match the longer "added as"/"deleted as"/"editing" forms first so the
-/// shorter "add"/"delete"/"edit" arms only fire on the bare-summary variants.
-/// The "edited" marker has NO trailing space so it also matches the
+/// Match the longer "added as"/"opened for add"/"deleted as"/"opened for edit"/
+/// "editing" forms first so the shorter "add"/"delete"/"edit" arms only fire
+/// on the bare-summary variants.
+/// The "edited" and "opened for edit"/"opened for add" markers have NO trailing
+/// space so they also match end-of-line live `-s` info lines
+/// (`...#25 - opened for edit`, `...#1 - opened for add`) and the
 /// "edited, also opened" form (reconcile -n edit arm).
-const RECONCILE_MARKERS_NOT_IN_DEPOT: &[&str] = &[" - added as ", " - add "];
+const RECONCILE_MARKERS_NOT_IN_DEPOT: &[&str] =
+    &[" - added as ", " - opened for add", " - add "];
 const RECONCILE_MARKERS_MISSING_ON_DISK: &[&str] = &[" - deleted as ", " - delete "];
-const RECONCILE_MARKERS_DIFFERS: &[&str] = &[" - editing ", " - edited", " - edit "];
+const RECONCILE_MARKERS_DIFFERS: &[&str] =
+    &[" - opened for edit", " - editing ", " - edited", " - edit "];
 
 /// The 4 supplemental sync-warning patterns p4 emits on exit-0-but-noisy
 /// syncs. Tail-matched on the severity-stripped remainder AFTER
@@ -2866,12 +2871,15 @@ pub fn is_ignored_generated(rel_path: &str) -> bool {
     false
 }
 
-/// Build the FIXED 3-entry depot-syntax whitelist for the audit
-/// (Config/..., Source/..., <project>.uproject) per D-scope. Resolves the
-/// project path the SAME way as `resolve_non_excluded_paths` (try
-/// root/UnrealEngine/<project>, then root/<project>), then builds the 3
-/// entries. Does NOT honor exclusions — the audit wants a fixed whitelist
-/// regardless of the sync-exclude list (D-scope: whitelist, not exclude list).
+/// Build the depot-syntax whitelist for the audit (Config/..., Source/...,
+/// plus any `*.uproject` files found on disk under the resolved project path)
+/// per D-scope. Resolves the project path the SAME way as
+/// `resolve_non_excluded_paths` (try root/UnrealEngine/<project>, then
+/// root/<project>). Does NOT invent `{project_dir}.uproject` — if none exist
+/// the uproject entry is omitted. Multiple `*.uproject` files (small N) are
+/// all included. Does NOT honor exclusions — the audit wants a fixed
+/// whitelist regardless of the sync-exclude list (D-scope: whitelist, not
+/// exclude list).
 pub fn build_audit_whitelist_args(root_path: &str, project_dir: &str) -> Vec<String> {
     let root = Path::new(root_path);
     let project_candidates = [
@@ -2896,11 +2904,31 @@ pub fn build_audit_whitelist_args(root_path: &str, project_dir: &str) -> Vec<Str
         .to_string_lossy()
         .replace('\\', "/");
 
-    vec![
+    let mut args = vec![
         format!("{}/Config/...", project_rel),
         format!("{}/Source/...", project_rel),
-        format!("{}/{}.uproject", project_rel, project_dir),
-    ]
+    ];
+
+    // Discover actual *.uproject files; do not invent `{project_dir}.uproject`.
+    if let Ok(entries) = std::fs::read_dir(project_path) {
+        let mut uprojects: Vec<String> = entries
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_type().map(|t| t.is_file()).unwrap_or(false))
+            .filter_map(|e| {
+                let name = e.file_name();
+                let name = name.to_string_lossy();
+                if name.to_ascii_lowercase().ends_with(".uproject") {
+                    Some(format!("{}/{}", project_rel, name))
+                } else {
+                    None
+                }
+            })
+            .collect();
+        uprojects.sort();
+        args.extend(uprojects);
+    }
+
+    args
 }
 
 #[cfg(test)]
@@ -3048,6 +3076,36 @@ Server network estimates: files added/updated/deleted=0/0/0, bytes added/updated
             "//depot/ExampleGame/Source/Bar.cpp#2 - editing D:\\ExampleDepot\\ExampleGame\\Source\\Bar.cpp",
         );
         assert_eq!(r, Some((WorkspaceHealthCategory::Differs, "Source/Bar.cpp".to_string())));
+    }
+
+    #[test]
+    fn test_parse_reconcile_line_opened_for_edit() {
+        // Live `-s` reconcile on an already-opened .uproject: "...#25 - opened for edit"
+        let r = parse_reconcile_line(
+            "info: UnrealEngine\\FYGame\\FY.uproject#25 - opened for edit",
+        );
+        assert_eq!(
+            r,
+            Some((
+                WorkspaceHealthCategory::Differs,
+                "FYGame/FY.uproject".to_string()
+            ))
+        );
+    }
+
+    #[test]
+    fn test_parse_reconcile_line_opened_for_add() {
+        // Live `-s` reconcile on an opened-for-add config file.
+        let r = parse_reconcile_line(
+            "info: UnrealEngine\\FYGame\\Config\\ContentBaker\\Win64\\Redirects.json#1 - opened for add",
+        );
+        assert_eq!(
+            r,
+            Some((
+                WorkspaceHealthCategory::NotInDepot,
+                "Config/ContentBaker/Win64/Redirects.json".to_string()
+            ))
+        );
     }
 
     #[test]
@@ -3255,25 +3313,31 @@ Server network estimates: files added/updated/deleted=0/0/0, bytes added/updated
 
     #[test]
     fn test_build_audit_whitelist_args_three_entries() {
-        // The whitelist is EXACTLY 3 depot-syntax entries: Config/..., Source/...,
-        // and the <project>.uproject file. Per D-scope: whitelist, not exclude list.
-        let args = build_audit_whitelist_args("D:\\ExampleDepot", "ExampleGame");
+        // Config/... + Source/... + discovered on-disk *.uproject (not invented).
+        use std::fs;
+        let tmp_dir = std::env::temp_dir().join("p4_test_audit_whitelist_three");
+        let _ = fs::remove_dir_all(&tmp_dir);
+        let project_dir = tmp_dir.join("ExampleGame");
+        fs::create_dir_all(project_dir.join("Config")).unwrap();
+        fs::create_dir_all(project_dir.join("Source")).unwrap();
+        fs::write(project_dir.join("ExampleGame.uproject"), "{}").unwrap();
+
+        let root_str = tmp_dir.to_string_lossy().replace('\\', "/");
+        let args = build_audit_whitelist_args(&root_str, "ExampleGame");
         assert_eq!(args.len(), 3, "expected exactly 3 whitelist entries, got {args:?}");
-        // Config subtree (wildcard)
         assert!(
             args.iter().any(|a| a.ends_with("/Config/...")),
             "missing Config/... entry: {args:?}"
         );
-        // Source subtree (wildcard)
         assert!(
             args.iter().any(|a| a.ends_with("/Source/...")),
             "missing Source/... entry: {args:?}"
         );
-        // .uproject descriptor file (exact, no wildcard)
         assert!(
             args.iter().any(|a| a.ends_with("/ExampleGame.uproject")),
-            "missing ExampleGame.uproject entry: {args:?}"
+            "missing discovered ExampleGame.uproject entry: {args:?}"
         );
+        let _ = fs::remove_dir_all(&tmp_dir);
     }
 
     #[test]
@@ -3295,6 +3359,77 @@ Server network estimates: files added/updated/deleted=0/0/0, bytes added/updated
         assert!(
             args.iter().any(|a| a.contains("UnrealEngine/ExampleGame/Config/...")),
             "expected UnrealEngine/ExampleGame/Config/... when project is under UnrealEngine/, got {args:?}"
+        );
+        assert!(
+            args.iter().any(|a| a.contains("UnrealEngine/ExampleGame/ExampleGame.uproject")),
+            "expected discovered UnrealEngine/ExampleGame/ExampleGame.uproject, got {args:?}"
+        );
+        let _ = fs::remove_dir_all(&tmp_dir);
+    }
+
+    #[test]
+    fn test_build_audit_whitelist_args_discovers_mismatched_uproject_name() {
+        // Live Art_UGS_Cook: project_dir is FYGame, on-disk file is FY.uproject.
+        use std::fs;
+        let tmp_dir = std::env::temp_dir().join("p4_test_audit_whitelist_fy_uproject");
+        let _ = fs::remove_dir_all(&tmp_dir);
+        let project_dir = tmp_dir.join("UnrealEngine").join("FYGame");
+        fs::create_dir_all(project_dir.join("Config")).unwrap();
+        fs::create_dir_all(project_dir.join("Source")).unwrap();
+        fs::write(project_dir.join("FY.uproject"), "{}").unwrap();
+
+        let root_str = tmp_dir.to_string_lossy().replace('\\', "/");
+        let args = build_audit_whitelist_args(&root_str, "FYGame");
+        assert!(
+            args.iter()
+                .any(|a| a.contains("UnrealEngine/FYGame/FY.uproject")),
+            "expected discovered FY.uproject, not invented FYGame.uproject: {args:?}"
+        );
+        assert!(
+            args.iter().all(|a| !a.ends_with("/FYGame.uproject")),
+            "must not invent FYGame.uproject: {args:?}"
+        );
+        let _ = fs::remove_dir_all(&tmp_dir);
+    }
+
+    #[test]
+    fn test_build_audit_whitelist_args_omits_missing_uproject() {
+        // No on-disk *.uproject → omit the entry rather than inventing one.
+        let args = build_audit_whitelist_args("D:\\ExampleDepotDoesNotExist", "ExampleGame");
+        assert!(
+            args.iter().any(|a| a.ends_with("/Config/...")),
+            "missing Config/... entry: {args:?}"
+        );
+        assert!(
+            args.iter().any(|a| a.ends_with("/Source/...")),
+            "missing Source/... entry: {args:?}"
+        );
+        assert!(
+            args.iter().all(|a| !a.ends_with(".uproject")),
+            "must not invent {{project_dir}}.uproject when none exist: {args:?}"
+        );
+        assert_eq!(args.len(), 2, "expected Config+Source only, got {args:?}");
+    }
+
+    #[test]
+    fn test_build_audit_whitelist_args_includes_all_uproject_files() {
+        use std::fs;
+        let tmp_dir = std::env::temp_dir().join("p4_test_audit_whitelist_multi_uproject");
+        let _ = fs::remove_dir_all(&tmp_dir);
+        let project_dir = tmp_dir.join("ExampleGame");
+        fs::create_dir_all(&project_dir).unwrap();
+        fs::write(project_dir.join("A.uproject"), "{}").unwrap();
+        fs::write(project_dir.join("B.uproject"), "{}").unwrap();
+
+        let root_str = tmp_dir.to_string_lossy().replace('\\', "/");
+        let args = build_audit_whitelist_args(&root_str, "ExampleGame");
+        assert!(
+            args.iter().any(|a| a.ends_with("/A.uproject")),
+            "missing A.uproject: {args:?}"
+        );
+        assert!(
+            args.iter().any(|a| a.ends_with("/B.uproject")),
+            "missing B.uproject: {args:?}"
         );
         let _ = fs::remove_dir_all(&tmp_dir);
     }
