@@ -2,6 +2,11 @@
 
 All notable changes to Simple UnrealGameSync will be documented in this file.
 
+## [1.8.4] - 2026-09-14
+
+### Changed
+- **Sidebar footer**: realigned with the canonical side-footer contract — the status dot now sits before the Perforce label, all three footer rows share one 12px muted text scale, and their left edges line up.
+
 ## [1.8.3] - 2026-09-14
 
 ### Fixed
