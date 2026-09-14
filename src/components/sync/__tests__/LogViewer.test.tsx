@@ -17,11 +17,13 @@ vi.mock("react-virtuoso", () => ({
   Virtuoso: ({
     data,
     itemContent,
+    className,
   }: {
     data: string[];
     itemContent: (index: number, line: string) => React.ReactNode;
+    className?: string;
   }) => (
-    <div>
+    <div data-testid="virtuoso" className={className}>
       {data.map((line, i) => (
         <div key={i}>{itemContent(i, line)}</div>
       ))}
@@ -75,5 +77,34 @@ describe("LogViewer chrome", () => {
       "//DemoDepot/MainGame/Content/Characters/SomeVeryLongAssetName/Textures/T_VeryLongAssetName_DependencyChain_2K.uasset#1234 - updating";
     renderWithI18n(<LogViewer lines={[longToken]} />);
     expect(screen.getByText(longToken)).toBeDefined();
+  });
+
+  // empty-sync-output: populated Virtuoso must be given a definite width.
+  // HistoryTab already uses a block min-w-0 wrapper + className="h-full w-full".
+  // A default flex-row wrapper + only h-full lets the scroller's intrinsic
+  // width collapse to 0 (abs-positioned rows), so live LogBatch lines never paint.
+  it("populated virtuoso is width-constrained like HistoryTab, not a shrink-to-zero flex item", () => {
+    renderWithI18n(<LogViewer lines={["//depot/Foo.cpp#12 - updating"]} />);
+    const scroller = screen.getByTestId("virtuoso");
+    expect(scroller.className).toContain("h-full");
+    expect(scroller.className).toContain("w-full");
+    const wrapper = scroller.parentElement;
+    expect(wrapper).not.toBeNull();
+    expect(wrapper?.className).toContain("min-w-0");
+    // Default `flex` is row — the 0-width trap. flex-col is acceptable; bare flex is not.
+    const cls = wrapper?.className ?? "";
+    const isFlexRow =
+      /(?:^|\s)flex(?:\s|$)/.test(cls) && !/(?:^|\s)flex-col(?:\s|$)/.test(cls);
+    expect(isFlexRow).toBe(false);
+  });
+
+  // Boundary neighbor: a single line (the smallest populated class) still
+  // takes the Virtuoso path, never the empty-state chrome.
+  it("a singleton line uses the virtuoso path, not the empty-state chrome", () => {
+    const t = makeT("en");
+    renderWithI18n(<LogViewer lines={["one"]} />);
+    expect(screen.getByTestId("virtuoso")).toBeDefined();
+    expect(screen.queryByText(t("sync.log.empty"))).toBeNull();
+    expect(screen.getByText("one")).toBeDefined();
   });
 });

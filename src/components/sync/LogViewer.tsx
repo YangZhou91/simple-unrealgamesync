@@ -27,8 +27,13 @@ export function LogViewer({ lines }: LogViewerProps) {
     );
   }
 
+  // empty-sync-output: do NOT wrap Virtuoso in a default flex-row. HistoryTab
+  // already uses a block min-w-0 wrapper + h-full w-full; a flex-row item with
+  // only h-full collapses to 0 intrinsic width (abs-positioned rows) so live
+  // LogBatch lines never paint. Empty-state above is a different branch and
+  // can stay flex-centered.
   return (
-    <div className="flex h-full min-h-0 flex-1 overflow-hidden">
+    <div className="h-full min-h-0 min-w-0 flex-1 overflow-hidden">
       <Virtuoso
         data={lines}
         followOutput="smooth"
@@ -37,7 +42,7 @@ export function LogViewer({ lines }: LogViewerProps) {
             {line}
           </div>
         )}
-        className="h-full"
+        className="h-full w-full"
       />
     </div>
   );
