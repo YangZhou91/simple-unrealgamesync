@@ -1,4 +1,5 @@
 use crate::models::SyncEvent;
+use crate::services::operation_lock::OperationLock;
 use crate::services::p4_executor;
 use crate::services::p4_executor::{P4Executor, SyncOptions, WorkspaceHealthReport};
 use crate::services::process_manager::ProcessManager;
@@ -180,15 +181,22 @@ pub async fn get_workspace_stream(
     .await
 }
 
-/// Returns whether a sync pipeline is currently running on the backend.
-/// Used by the frontend to detect stale UI state when the WebView was
-/// suspended (e.g. window minimized) and Channel events were lost.
+/// Returns which operation (if any) currently holds the shared operation lock
+/// — `"none" | "sync" | "gitPull" | "engineUpdate"` (D-14). Used by the
+/// frontend to recover the true in-flight state when the WebView was suspended
+/// (e.g. window minimized) and Channel events were lost.
+///
+/// Answers from the same authority the lock enforces, so the reported state
+/// and the enforced rule cannot disagree.
 #[tauri::command]
-pub fn is_sync_running(state: State<'_, Arc<SyncOrchestrator>>) -> bool {
+pub fn get_active_operation(state: State<'_, Arc<OperationLock>>) -> String {
     // SYNC command (pub fn, not async) — uses trace_command_sync_ok (the sync,
     // non-Result variant). No path-carrying args (State only), no redact needed.
-    trace_command_sync_ok("is_sync_running", String::new(), || {
-        state.is_pipeline_running()
+    trace_command_sync_ok("get_active_operation", String::new(), || {
+        state
+            .current()
+            .map(|op| op.as_str().to_string())
+            .unwrap_or_else(|| "none".to_string())
     })
 }
 

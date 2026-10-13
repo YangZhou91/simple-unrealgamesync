@@ -1,6 +1,7 @@
 use crate::error::AppError;
 use crate::models::{HistoryRecord, SyncEvent, WarningEntry, WorkspaceConfig};
 use crate::services::history::HistoryService;
+use crate::services::operation_lock::{Operation, OperationLock};
 use crate::services::p4_executor::{merge_warning_lists, validate_target_cl, P4Executor, SyncOptions};
 use crate::services::process_manager::ProcessManager;
 use crate::services::workspace::WorkspaceService;
@@ -39,14 +40,16 @@ pub struct SyncOrchestrator {
     p4: P4Executor,
     process_manager: Arc<ProcessManager>,
     pipeline_running: AtomicBool,
+    lock: Arc<OperationLock>,
 }
 
 impl SyncOrchestrator {
-    pub fn new(process_manager: Arc<ProcessManager>) -> Self {
+    pub fn new(process_manager: Arc<ProcessManager>, lock: Arc<OperationLock>) -> Self {
         Self {
             p4: P4Executor::new(),
             process_manager,
             pipeline_running: AtomicBool::new(false),
+            lock,
         }
     }
 
@@ -62,17 +65,13 @@ impl SyncOrchestrator {
         channel: CountingChannel,
         app: AppHandle,
     ) -> Result<(), AppError> {
-        if self.pipeline_running.swap(true, Ordering::SeqCst) {
-            return Err(AppError::Process(
-                "A sync pipeline is already running".into(),
-            ));
-        }
+        // D-13: enter through the shared lock. The guard is a local that lives
+        // to the end of this fn, so `Drop` releases the slot on every return
+        // path — success, early `?` error, or the inner future's own error.
+        let _guard = self.lock.acquire(Operation::Sync)?;
 
-        let result = self
-            .run_pipeline_inner(workspace_id, target_cl, include_engine, channel, app)
-            .await;
-        self.pipeline_running.store(false, Ordering::SeqCst);
-        result
+        self.run_pipeline_inner(workspace_id, target_cl, include_engine, channel, app)
+            .await
     }
 
     async fn run_pipeline_inner(

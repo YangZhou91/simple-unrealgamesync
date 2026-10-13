@@ -1,5 +1,6 @@
 pub mod git_service;
 pub mod history;
+pub mod operation_lock;
 pub mod p4_executor;
 pub mod process_manager;
 pub mod sync_orchestrator;

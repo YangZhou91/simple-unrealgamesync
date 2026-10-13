@@ -5,6 +5,7 @@ pub mod services;
 pub mod utils;
 
 use services::git_service::GitService;
+use services::operation_lock::OperationLock;
 use services::p4_executor::P4Executor;
 use services::process_manager::ProcessManager;
 use services::sync_orchestrator::SyncOrchestrator;
@@ -44,7 +45,13 @@ pub fn run() {
     }));
 
     let process_manager = Arc::new(ProcessManager::new());
-    let sync_orchestrator = Arc::new(SyncOrchestrator::new(process_manager.clone()));
+    // D-13: one shared operation lock (Sync | GitPull | EngineUpdate), managed
+    // below and injected into every service that owns an entry point.
+    let operation_lock = Arc::new(OperationLock::new());
+    let sync_orchestrator = Arc::new(SyncOrchestrator::new(
+        process_manager.clone(),
+        operation_lock.clone(),
+    ));
     let p4_executor = Arc::new(P4Executor::new());
     let git_service = Arc::new(GitService::new(process_manager.clone()));
 
@@ -65,6 +72,7 @@ pub fn run() {
         .manage(process_manager)
         .manage(p4_executor)
         .manage(git_service)
+        .manage(operation_lock)
         .invoke_handler(tauri::generate_handler![
             commands::workspace::add_workspace,
             commands::workspace::get_workspaces,
@@ -79,7 +87,7 @@ pub fn run() {
             commands::sync::check_workspace_health,
             commands::sync::get_current_cl,
             commands::sync::get_workspace_stream,
-            commands::sync::is_sync_running,
+            commands::sync::get_active_operation,
             commands::sync::retry_step,
             commands::sync::start_rollback,
             commands::history::get_history,
