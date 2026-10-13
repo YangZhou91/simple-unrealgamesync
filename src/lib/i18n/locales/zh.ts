@@ -16,6 +16,8 @@ const zh: Record<MessageKey, string> = {
   "steps.gitPull.stash": "保存本地更改…",
   "steps.gitPull.preNetwork": "准备下载…",
   "steps.gitPull.restoreStash": "恢复本地更改…",
+  "steps.engineUpdate.count": "正在统计引擎文件…",
+  "steps.engineUpdate.sync": "正在更新引擎…",
   "steps.unknown": "进行中…",
   "steps.status.cancelledAt": "已取消于 {step}",
 

@@ -230,9 +230,12 @@ mod tests {
     /// frozen-vocabulary test below loudly instead of silently breaking the
     /// (step, subStep) -> label mapping.
     ///
-    /// 11 send sites project onto 10 pairs (closeUe and closeExcel share
-    /// `check` — the step field disambiguates; genProject shares `gen` across
-    /// sync_orchestrator.rs and git_service.rs — same label).
+    /// 15 send sites project onto 12 distinct tokens (13 (step, token) entries:
+    /// closeUe and closeExcel share `check` — the step field disambiguates;
+    /// genProject's `gen` is emitted by sync_orchestrator.rs, git_service.rs and
+    /// engine_service.rs but carries one label). `engineUpdate` carries two
+    /// distinct phases — `count` then `sync` — mirroring gitPull's multi-phase
+    /// vocabulary.
     pub fn known_sub_steps() -> &'static [(&'static str, &'static str)] {
         &[
             ("closeUe", "check"),
@@ -246,6 +249,8 @@ mod tests {
             ("gitPull", "stash"),
             ("gitPull", "preNetwork"),
             ("gitPull", "restoreStash"),
+            ("engineUpdate", "count"),
+            ("engineUpdate", "sync"),
         ]
     }
 
@@ -529,9 +534,10 @@ mod tests {
     #[test]
     fn known_sub_steps_vocabulary_is_frozen() {
         // Phase 18 (WIRE-02 / D-03): the token set is a one-way wire contract.
-        // This test freezes the EXACT 11-pair vocabulary (10 distinct tokens —
-        // closeUe/closeExcel share `check`, genProject shares `gen` across both
-        // service files). Any addition, removal, reordering-as-set-change, or
+        // This test freezes the EXACT 13-pair vocabulary (12 distinct tokens —
+        // closeUe/closeExcel share `check`, genProject shares `gen` across all
+        // three service files, and engineUpdate carries the two new phases
+        // `count` + `sync`). Any addition, removal, reordering-as-set-change, or
         // wording-level rename fails here loudly so Phase 19's
         // (step, subStep) -> label mapping can never silently drift.
         let frozen: Vec<(&str, &str)> = vec![
@@ -546,6 +552,8 @@ mod tests {
             ("gitPull", "stash"),
             ("gitPull", "preNetwork"),
             ("gitPull", "restoreStash"),
+            ("engineUpdate", "count"),
+            ("engineUpdate", "sync"),
         ];
         let live = known_sub_steps();
         assert_eq!(

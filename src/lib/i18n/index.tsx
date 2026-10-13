@@ -83,6 +83,8 @@ export const KNOWN_SUB_STEPS = [
   ["gitPull", "stash"],
   ["gitPull", "preNetwork"],
   ["gitPull", "restoreStash"],
+  ["engineUpdate", "count"],
+  ["engineUpdate", "sync"],
 ] as const;
 
 const PIPELINE_CANONICAL: Record<string, string> = {

@@ -14,6 +14,8 @@ const en = {
   "steps.gitPull.stash": "Saving local changes…",
   "steps.gitPull.preNetwork": "Preparing download…",
   "steps.gitPull.restoreStash": "Restoring local changes…",
+  "steps.engineUpdate.count": "Counting engine files…",
+  "steps.engineUpdate.sync": "Updating engine…",
   "steps.unknown": "Working…",
   "steps.status.cancelledAt": "Cancelled at {step}",
 

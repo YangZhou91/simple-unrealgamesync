@@ -232,7 +232,9 @@ describe("renderWithI18n", () => {
 
 describe("steps keys completeness", () => {
   it("every KNOWN_SUB_STEPS pair has steps.{step}.{subStep} in en", () => {
-    expect(KNOWN_SUB_STEPS).toHaveLength(11);
+    // 13 pairs: the two engineUpdate phases (count, sync) were added to the
+    // frozen vocabulary in lockstep with sync_event.rs's known_sub_steps().
+    expect(KNOWN_SUB_STEPS).toHaveLength(13);
     for (const [step, subStep] of KNOWN_SUB_STEPS) {
       const key = `steps.${step}.${subStep}`;
       expect(Object.prototype.hasOwnProperty.call(en, key), key).toBe(true);
