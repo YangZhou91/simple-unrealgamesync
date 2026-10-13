@@ -85,7 +85,7 @@ const zh: Record<MessageKey, string> = {
   "sync.targetCl.error": "CL 必须是数字",
   "sync.engine.checkbox": "同步 UnrealEngine 源码",
   "sync.engine.hintOn": "同步项目 + UnrealEngine",
-  "sync.engine.hintOff": "仅同步项目（引擎通过 Git Pull）",
+  "sync.engine.hintOff": "仅同步项目（引擎单独更新）",
   "sync.start": "开始同步",
   "sync.git.cardTitle": "UnrealEngine 仓库",
   "sync.git.cardHint": "快进引擎源码",
@@ -131,6 +131,21 @@ const zh: Record<MessageKey, string> = {
   // Phase 26 (26-03, UI-SPEC §10): canonical Git running/log chrome.
   "sync.git.runningTitle": "正在拉取 UnrealEngine",
   "sync.git.logTitle": "Git 输出",
+
+  // ---- Phase 30 (D-08/D-11): the P4 engine-update card + running/terminal panel ----
+  "sync.engineP4.cardTitle": "UnrealEngine（Perforce）",
+  "sync.engineP4.cardHint": "更新引擎源码至最新",
+  "sync.engineP4.updateButton": "P4 更新 UnrealEngine",
+  "sync.engineP4.runningTitle": "正在更新 UnrealEngine",
+  "sync.engineP4.cancel": "取消更新",
+  "sync.engineP4.logTitle": "P4 输出",
+  "sync.engineP4.success": "引擎更新成功",
+  "sync.engineP4.successLine": "引擎已更新至 CL {cl}",
+  "sync.engineP4.failed": "引擎更新失败",
+  "sync.engineP4.partial": "项目文件未生成",
+  "sync.engineP4.unknownError": "未知错误",
+  "sync.engineP4.retry": "重试更新",
+  "sync.engineP4.back": "返回空闲",
 
   // ---- Phase 20: SyncDashboard header + tabs ----
   "sync.dash.workspace": "工作区",

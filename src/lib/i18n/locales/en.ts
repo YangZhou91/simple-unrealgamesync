@@ -83,7 +83,7 @@ const en = {
   "sync.targetCl.error": "CL must be a number",
   "sync.engine.checkbox": "Sync UnrealEngine source",
   "sync.engine.hintOn": "Syncing project + UnrealEngine",
-  "sync.engine.hintOff": "Syncing project only (engine via Git Pull)",
+  "sync.engine.hintOff": "Syncing project only (engine updates separately)",
   "sync.start": "Start Sync",
   "sync.git.cardTitle": "UnrealEngine repository",
   "sync.git.cardHint": "Fast-forward the engine source",
@@ -129,6 +129,21 @@ const en = {
   // Phase 26 (26-03, UI-SPEC §10): canonical Git running/log chrome.
   "sync.git.runningTitle": "Pulling UnrealEngine",
   "sync.git.logTitle": "Git output",
+
+  // ---- Phase 30 (D-08/D-11): the P4 engine-update card + running/terminal panel ----
+  "sync.engineP4.cardTitle": "UnrealEngine (Perforce)",
+  "sync.engineP4.cardHint": "Update the engine source to latest",
+  "sync.engineP4.updateButton": "P4 Update UnrealEngine",
+  "sync.engineP4.runningTitle": "Updating UnrealEngine",
+  "sync.engineP4.cancel": "Cancel Update",
+  "sync.engineP4.logTitle": "P4 output",
+  "sync.engineP4.success": "Engine updated successfully",
+  "sync.engineP4.successLine": "Engine updated to CL {cl}",
+  "sync.engineP4.failed": "Engine update failed",
+  "sync.engineP4.partial": "Project files were not generated",
+  "sync.engineP4.unknownError": "Unknown error",
+  "sync.engineP4.retry": "Retry Update",
+  "sync.engineP4.back": "Back to Idle",
 
   // ---- Phase 20: SyncDashboard header + tabs ----
   "sync.dash.workspace": "Workspace",
