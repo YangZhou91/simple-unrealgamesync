@@ -4,6 +4,7 @@ pub mod models;
 pub mod services;
 pub mod utils;
 
+use services::engine_service::EngineService;
 use services::git_service::GitService;
 use services::operation_lock::OperationLock;
 use services::p4_executor::P4Executor;
@@ -54,6 +55,10 @@ pub fn run() {
     ));
     let p4_executor = Arc::new(P4Executor::new());
     let git_service = Arc::new(GitService::new(process_manager.clone(), operation_lock.clone()));
+    let engine_service = Arc::new(EngineService::new(
+        process_manager.clone(),
+        operation_lock.clone(),
+    ));
 
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
@@ -72,6 +77,7 @@ pub fn run() {
         .manage(process_manager)
         .manage(p4_executor)
         .manage(git_service)
+        .manage(engine_service)
         .manage(operation_lock)
         .invoke_handler(tauri::generate_handler![
             commands::workspace::add_workspace,
@@ -95,6 +101,9 @@ pub fn run() {
             commands::git::git_pull,
             commands::git::git_status,
             commands::git::stop_git_pull,
+            commands::engine::engine_update,
+            commands::engine::stop_engine_update,
+            commands::engine::engine_status,
             commands::log::open_logs_folder,
             commands::log::export_log,
             commands::log::get_log_path,

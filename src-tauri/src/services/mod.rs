@@ -1,3 +1,4 @@
+pub mod engine_service;
 pub mod git_service;
 pub mod history;
 pub mod operation_lock;
