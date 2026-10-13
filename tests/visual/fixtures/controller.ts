@@ -22,7 +22,7 @@ export type ScenarioId =
   | "rollback-complete";
 
 /** Which start command opened the channel being scripted. */
-export type StartKind = "sync" | "rollback" | "git";
+export type StartKind = "sync" | "rollback" | "git" | "engine";
 
 /**
  * Canonical view union mirroring the preview's view names (ugs-code-preview-
@@ -54,8 +54,8 @@ type TerminalEvent = Extract<
 /**
  * A scenario script: events emitted when the start command arrives, plus an
  * optional terminal event. Absent terminal (or deferCancel) keeps the invoke
- * promise pending — the held running state the 5s is_sync_running reconcile
- * in useSync must NOT reset.
+ * promise pending — the held running state the 5s get_active_operation
+ * reconcile in useSync must NOT reset.
  */
 export interface ScenarioScript {
   prologue: SyncEvent[];
@@ -178,9 +178,28 @@ export class FixtureController {
     this.#scripts = { ...this.#scripts, ...scripts };
   }
 
-  /** True while a scripted start invoke is streaming (mocked is_sync_running). */
+  /** True while a scripted start invoke is streaming (mocked get_active_operation). */
   isScenarioActive(): boolean {
     return this.#pending !== null;
+  }
+
+  /**
+   * The D-14 wire token for the currently pending start, or `"sync"` when
+   * nothing is pending (the mock only consults this while `isScenarioActive()`
+   * is true). Backs the mocked `get_active_operation` command.
+   *
+   * `"engine"` is accepted now (plan 30-05 wires the engine start kind) so
+   * plan 30-05 does not have to revisit this file's contract.
+   */
+  activeOperationKind(): "sync" | "gitPull" | "engineUpdate" {
+    switch (this.#pending?.kind) {
+      case "git":
+        return "gitPull";
+      case "engine":
+        return "engineUpdate";
+      default:
+        return "sync";
+    }
   }
 
   /** Per-channel sequential index — Channel orders strictly by index. */

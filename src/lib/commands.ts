@@ -42,8 +42,10 @@ export function stopSync(): Promise<void> {
   return invoke("stop_sync");
 }
 
-export function isSyncRunning(): Promise<boolean> {
-  return invoke("is_sync_running");
+export function getActiveOperation(): Promise<
+  "none" | "sync" | "gitPull" | "engineUpdate"
+> {
+  return invoke("get_active_operation");
 }
 
 export function getCurrentCl(workspaceId: string): Promise<string | null> {

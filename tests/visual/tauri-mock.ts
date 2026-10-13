@@ -100,8 +100,10 @@ export function createHarness(): void {
         return FIXTURE_HEALTH_REPORT;
       // true only while a scripted sync/rollback/git scenario is streaming —
       // the 5s reconcile poll in useSync must not reset a held running state
-      case "is_sync_running":
-        return harnessController.isScenarioActive();
+      case "get_active_operation":
+        return harnessController.isScenarioActive()
+          ? harnessController.activeOperationKind()
+          : "none";
       case "start_sync":
       case "retry_step": {
         const id = channelArgId(arg(args));

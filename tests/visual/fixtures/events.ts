@@ -90,7 +90,7 @@ export const CANONICAL_SCRIPTS: Partial<Record<ScenarioId, ScenarioScript>> = {
   },
 
   // Advance to p4Sync then stop emitting — no terminal event; the held
-  // invoke keeps is_sync_running true (5s reconcile must not reset it).
+  // invoke keeps get_active_operation == "sync" (5s reconcile must not reset it).
   "running-hold": {
     prologue: [
       ...FIVE_STEPS.slice(0, 6),

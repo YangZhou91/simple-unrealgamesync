@@ -139,8 +139,8 @@ export function useSync(
       if (syncStateRef.current !== "running") return;
 
       try {
-        const running = await commands.isSyncRunning();
-        if (!running) {
+        const active = await commands.getActiveOperation();
+        if (active !== "sync") {
           console.warn("[useSync] Backend sync completed while WebView was suspended/throttled — resetting UI to idle");
           resetToIdle();
           // Trigger onSyncComplete so the parent can refresh CL/history
@@ -167,7 +167,7 @@ export function useSync(
     };
   }, [resetToIdle, onSyncComplete]);
 
-  // Periodic reconciliation: while syncState is "running", poll isSyncRunning
+  // Periodic reconciliation: while syncState is "running", poll getActiveOperation
   // every 5s. If the backend says it's done but Channel events were lost
   // (WebView2 throttling, IPC buffering, etc.), auto-reset the UI.
   useEffect(() => {
@@ -175,8 +175,8 @@ export function useSync(
 
     const timer = setInterval(async () => {
       try {
-        const running = await commands.isSyncRunning();
-        if (!running) {
+        const active = await commands.getActiveOperation();
+        if (active !== "sync") {
           console.warn("[useSync] Periodic reconciliation: backend finished but UI still running — resetting");
           resetToIdle();
           onSyncComplete?.(null);
