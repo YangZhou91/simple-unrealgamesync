@@ -11,6 +11,7 @@ import {
   GitPullRequest,
   Loader2,
   Play,
+  RefreshCw,
 } from "lucide-react";
 import { CompletionSummaryPanel } from "./CompletionSummaryPanel";
 import { useT, useStepLabels, resolveSubStep, formatTimestamp } from "@/lib/i18n";
@@ -50,6 +51,12 @@ interface IdlePanelProps {
   // a null default (mirroring stream/p4Client) so existing fixtures keep
   // type-checking — App.tsx threads workspaces.currentCl at runtime.
   currentCl?: string | null;
+  // Phase 30 (D-08/D-10): the sibling P4 engine-update card. Optional with
+  // safe defaults so existing fixtures keep type-checking — App.tsx always
+  // threads both at runtime. engineCl is the engine subtree's own have-CL
+  // (never the project's Current CL), rendered hide-null (D-10).
+  onEngineUpdate?: () => void;
+  engineCl?: string | null;
 }
 
 export function IdlePanel({
@@ -68,6 +75,8 @@ export function IdlePanel({
   onSyncEngineChange = () => {},
   lastSyncWarnings = [],
   currentCl = null,
+  onEngineUpdate = () => {},
+  engineCl = null,
 }: IdlePanelProps) {
   // Phase 20 (SWEEP-01): CL validation stores a BOOLEAN only — the translated
   // error prose is looked up at render via t("sync.targetCl.error"), never
@@ -285,7 +294,49 @@ export function IdlePanel({
         )}
       </section>
 
-      {/* 3 — Closed five-step disclosure: explanatory chrome only. Labels are
+      {/* 3 — Secondary P4 engine-update row (D-08): a SIBLING of the Git row,
+          never a second button inside it, so the Git card's copy stays true and
+          Phase 31's path-selection decision (PTHS-01) stays open. The chip is
+          the MUTED P4 treatment (info is reserved for Git identity); the D-10
+          status line is the engine subtree's own have-CL, rendered hide-null. */}
+      <section className="mt-4 min-w-0 rounded-lg border border-border bg-card p-4 narrow:p-2">
+        <div className="flex min-w-0 flex-wrap items-start justify-between gap-x-4 gap-y-2">
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-2">
+              <h3 className="text-[17px] font-medium text-foreground">
+                {t("sync.engineP4.cardTitle")}
+              </h3>
+              <span className="inline-flex shrink-0 items-center rounded border border-border px-1.5 py-0.5 text-[11px] leading-tight text-muted-foreground">
+                {t("sync.badge.p4")}
+              </span>
+            </div>
+            <p className="mt-1 text-xs text-muted-foreground">
+              {t("sync.engineP4.cardHint")}
+            </p>
+            {/* D-10 engine have-CL row — label always, mono value only when
+                non-null, nothing rendered for null. No behind-arithmetic and
+                never the project's Current CL. */}
+            <div className="mt-2 flex min-w-0 flex-wrap items-baseline gap-1.5 text-xs text-muted-foreground">
+              <span>{t("sync.p4.currentCl")}</span>
+              {engineCl != null && (
+                <span className="font-mono tabular-nums text-foreground">{engineCl}</span>
+              )}
+            </div>
+          </div>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={onEngineUpdate}
+            disabled={!hasWorkspace || isBusy}
+            className="h-9 text-xs narrow:w-full"
+          >
+            <RefreshCw className="h-3.5 w-3.5" />
+            {t("sync.engineP4.updateButton")}
+          </Button>
+        </div>
+      </section>
+
+      {/* 4 — Closed five-step disclosure: explanatory chrome only. Labels are
           derived at render from STEP_ORDER + useStepLabels; no action, no
           state mutation, no second step definition. */}
       <details className="mt-4 min-w-0">
@@ -302,7 +353,7 @@ export function IdlePanel({
         </div>
       </details>
 
-      {/* 4 — Latest result card: completed/cancelled project from live
+      {/* 5 — Latest result card: completed/cancelled project from live
           lastSyncResult only (UI-SPEC §8). Cancelled never claims success and
           never fabricates a completion time — the real step label rides the
           existing steps.status.cancelledAt composition. */}

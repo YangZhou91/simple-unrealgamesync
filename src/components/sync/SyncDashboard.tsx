@@ -1,9 +1,10 @@
-import type { SyncState, StepStatus, SyncStep, HistoryRecord, GitState, GitBranchInfo, P4BehindInfo, WarningEntry, LastSyncResult } from "@/lib/types";
+import type { SyncState, StepStatus, SyncStep, HistoryRecord, GitState, GitBranchInfo, P4BehindInfo, WarningEntry, LastSyncResult, EngineUpdateState } from "@/lib/types";
 import type { GitProgressState } from "@/lib/gitProgress";
 import { IdlePanel } from "./IdlePanel";
 import { RunningPanel } from "./RunningPanel";
 import { ErrorPanel } from "./ErrorPanel";
 import { GitRunningPanel } from "./GitRunningPanel";
+import { EngineRunningPanel } from "./EngineRunningPanel";
 import { WorkspaceHealthPanel } from "./WorkspaceHealthPanel";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { HistoryTab } from "@/components/history/HistoryTab";
@@ -69,6 +70,22 @@ interface SyncDashboardProps {
   // Optional with a null default so the existing test fixture keeps
   // type-checking — App.tsx threads workspaces.currentCl at runtime.
   currentCl?: string | null;
+  // Phase 30 (D-08/D-11/D-12): the engine-update surface. All optional with
+  // safe defaults so the existing test fixture keeps type-checking — App.tsx
+  // always threads them at runtime. The engine branch is appended AFTER the
+  // git branch (§9.1), and engineState folds into isBusy (§9.2).
+  engineState?: EngineUpdateState;
+  engineLogLines?: string[];
+  engineErrorInfo?: { error: string } | null;
+  engineProgress?: { current: number; total: number; currentFile: string };
+  engineCurrentStep?: string | null;
+  engineCurrentSubStep?: string | null;
+  engineResultCl?: string | null;
+  onEngineUpdate?: () => void;
+  onStopEngineUpdate?: () => void;
+  onDismissEngineResult?: () => void;
+  onRetryEngineUpdate?: () => void;
+  engineCl?: string | null;
 }
 
 export function SyncDashboard({
@@ -111,10 +128,26 @@ export function SyncDashboard({
   onSyncEngineChange = () => {},
   lastSyncWarnings = [],
   currentCl = null,
+  engineState = "idle",
+  engineLogLines = [],
+  engineErrorInfo = null,
+  engineProgress = { current: 0, total: 0, currentFile: "" },
+  engineCurrentStep = null,
+  engineCurrentSubStep = null,
+  engineResultCl = null,
+  onEngineUpdate = () => {},
+  onStopEngineUpdate = () => {},
+  onDismissEngineResult = () => {},
+  onRetryEngineUpdate = () => {},
+  engineCl = null,
 }: SyncDashboardProps) {
   const { t } = useT();
   const isSyncRunning = syncState === "running";
-  const isBusy = isSyncRunning || historyRollingBack || gitState === "running";
+  const isBusy =
+    isSyncRunning ||
+    historyRollingBack ||
+    gitState === "running" ||
+    engineState === "running";
 
   return (
     <Tabs defaultValue="sync" className="flex min-h-0 flex-1 flex-col">
@@ -149,6 +182,19 @@ export function SyncDashboard({
             gitCurrentSubStep={gitCurrentSubStep}
             gitBranchInfo={gitBranchInfo}
             gitBranchLoading={gitBranchLoading}
+          />
+        ) : engineState !== "idle" ? (
+          <EngineRunningPanel
+            engineState={engineState}
+            logLines={engineLogLines}
+            errorInfo={engineErrorInfo}
+            progress={engineProgress}
+            currentStep={engineCurrentStep}
+            currentSubStep={engineCurrentSubStep}
+            resultCl={engineResultCl}
+            onCancel={onStopEngineUpdate}
+            onBack={onDismissEngineResult}
+            onRetry={onRetryEngineUpdate}
           />
         ) : syncState === "running" ? (
           <RunningPanel
@@ -198,6 +244,8 @@ export function SyncDashboard({
             onSyncEngineChange={onSyncEngineChange}
             lastSyncWarnings={lastSyncWarnings}
             currentCl={currentCl}
+            onEngineUpdate={onEngineUpdate}
+            engineCl={engineCl}
           />
         )}
       </TabsContent>

@@ -10,6 +10,7 @@ import { WorkspaceHeader } from "@/components/workspace/WorkspaceHeader";
 import { useWorkspaces } from "@/hooks/useWorkspaces";
 import { useSync } from "@/hooks/useSync";
 import { useGit } from "@/hooks/useGit";
+import { useEngineUpdate } from "@/hooks/useEngineUpdate";
 import { useBehindCheck } from "@/hooks/useBehindCheck";
 import { useHistory } from "@/hooks/useHistory";
 import { useUpdater } from "@/hooks/useUpdater";
@@ -65,13 +66,22 @@ function App() {
   );
   const sync = useSync(onSyncComplete, onWarningsChange);
   const git = useGit();
+  const engine = useEngineUpdate();
   const behind = useBehindCheck();
   const updater = useUpdater();
   const isSyncRunning = sync.syncState === "running";
   const isOperationRunning =
-    isSyncRunning || history.isRollingBack || git.gitState === "running";
+    isSyncRunning ||
+    history.isRollingBack ||
+    git.gitState === "running" ||
+    engine.engineState === "running";
   const [gitBranchInfo, setGitBranchInfo] = useState<GitBranchInfo | null>(null);
   const [gitBranchLoading, setGitBranchLoading] = useState(false);
+  // Phase 30 (D-10): the engine subtree's own have-CL for the idle engine
+  // card's status line (null = not-yet-fetched OR fetch failed — the row
+  // renders the label alone). Distinct from workspaces.currentCl, which is
+  // the PROJECT's CL and must never appear in the engine card.
+  const [engineCl, setEngineCl] = useState<string | null>(null);
   // P4 stream of the selected workspace's client spec (null = classic client
   // OR not-yet-fetched OR fetch failed — the UI shows the `classic client`
   // placeholder in all three cases). Static per-client — fetched once on
@@ -98,6 +108,26 @@ function App() {
   useEffect(() => {
     fetchGitStatus();
   }, [fetchGitStatus]);
+
+  // Phase 30 (D-10): fetch the engine subtree's have-CL eagerly on workspace
+  // switch, mirroring fetchGitStatus — non-blocking, failure → null (the
+  // status row renders the label alone).
+  const fetchEngineCl = useCallback(async () => {
+    if (workspaces.selectedWorkspace) {
+      try {
+        const cl = await commands.engineStatus(workspaces.selectedWorkspace.id);
+        setEngineCl(cl);
+      } catch {
+        setEngineCl(null);
+      }
+    } else {
+      setEngineCl(null);
+    }
+  }, [workspaces.selectedWorkspace]);
+
+  useEffect(() => {
+    fetchEngineCl();
+  }, [fetchEngineCl]);
 
   // Fetch the bound p4 stream once per workspace switch (mirrors git status —
   // no loading flag needed; the workspace's p4Client line renders immediately
@@ -205,6 +235,42 @@ function App() {
     }
   }, [workspaces.selectedWorkspace, git.startGitPull, fetchGitStatus, isOperationRunning]);
 
+  const handleEngineUpdate = useCallback(async () => {
+    if (isOperationRunning) {
+      return;
+    }
+    if (workspaces.selectedWorkspace) {
+      // Clear the prior summary BEFORE the engine update starts, mirroring
+      // handleGitPull (Phase 14 D-02). The engine update emits no project
+      // warnings, so this is a pure clear.
+      setLastSyncWarnings([]);
+      try {
+        await engine.startEngineUpdate(workspaces.selectedWorkspace.id);
+        // Refresh the engine have-CL after the run so the D-10 status row is
+        // honest, exactly as the git handler refreshes the branch.
+        fetchEngineCl();
+      } catch {
+        // Error handling is done in useEngineUpdate hook
+      }
+    }
+  }, [workspaces.selectedWorkspace, engine.startEngineUpdate, fetchEngineCl, isOperationRunning]);
+
+  // D-11 partial-state Retry reuses the same engine_update command — no new
+  // command is introduced (UI-SPEC §8.4).
+  const handleEngineRetry = useCallback(async () => {
+    if (isOperationRunning) {
+      return;
+    }
+    if (workspaces.selectedWorkspace) {
+      try {
+        await engine.startEngineUpdate(workspaces.selectedWorkspace.id);
+        fetchEngineCl();
+      } catch {
+        // Error handling is done in useEngineUpdate hook
+      }
+    }
+  }, [workspaces.selectedWorkspace, engine.startEngineUpdate, fetchEngineCl, isOperationRunning]);
+
   return (
     <TooltipProvider>
       {/* 24-02 (D-03): titlebar + shell share one 100vh column — AppLayout's
@@ -282,6 +348,23 @@ function App() {
             stream={streamInfo}
             p4Client={workspaces.selectedWorkspace?.p4Client ?? null}
             currentCl={workspaces.currentCl}
+            engineState={engine.engineState}
+            engineLogLines={engine.logLines}
+            engineErrorInfo={engine.errorInfo}
+            engineProgress={engine.progress}
+            engineCurrentStep={engine.currentStep}
+            engineCurrentSubStep={engine.currentSubStep}
+            engineResultCl={engine.resultCl}
+            engineCl={engineCl}
+            onEngineUpdate={handleEngineUpdate}
+            onStopEngineUpdate={engine.stopEngineUpdate}
+            // On dismiss, re-fetch the engine have-CL so the idle row shows the
+            // new CL (UI-SPEC §8.5).
+            onDismissEngineResult={() => {
+              engine.dismissEngineResult();
+              fetchEngineCl();
+            }}
+            onRetryEngineUpdate={handleEngineRetry}
             />
           </div>
         )}

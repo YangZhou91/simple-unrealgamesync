@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 import { useState } from "react";
-import { screen, fireEvent } from "@testing-library/react";
+import { screen, fireEvent, within } from "@testing-library/react";
 import { IdlePanel } from "@/components/sync/IdlePanel";
 import { makeT, renderWithI18n, useT, formatTimestamp } from "@/lib/i18n";
 import type {
@@ -262,9 +262,14 @@ describe("IdlePanel P4 card chrome", () => {
   it("renders card title, hint, and P4 badge from dictionary", () => {
     const t = makeT("en");
     renderWithI18n(<IdlePanel {...baseProps} />);
-    expect(screen.getByText(t("sync.p4.cardTitle"))).toBeDefined();
-    expect(screen.getByText(t("sync.p4.cardHint"))).toBeDefined();
-    expect(screen.getByText(t("sync.badge.p4"))).toBeDefined();
+    // Phase 30: the muted P4 chip now also appears on the engine card, so
+    // scope this primary-card assertion to the primary card's own section.
+    const p4Card = screen
+      .getByRole("heading", { name: t("sync.p4.cardTitle") })
+      .closest("section")!;
+    expect(within(p4Card).getByText(t("sync.p4.cardTitle"))).toBeDefined();
+    expect(within(p4Card).getByText(t("sync.p4.cardHint"))).toBeDefined();
+    expect(within(p4Card).getByText(t("sync.badge.p4"))).toBeDefined();
   });
 
   it("renders engine hints from dictionary for a valid CL", () => {
@@ -297,14 +302,22 @@ describe("IdlePanel canonical idle surface (Phase 26)", () => {
   it("renders the P4 footer current-CL label with the live raw CL", () => {
     const t = makeT("en");
     renderWithI18n(<IdlePanel {...baseProps} currentCl="381515" />);
-    expect(screen.getByText(t("sync.p4.currentCl"))).toBeDefined();
-    expect(screen.getByText("381515")).toBeDefined();
+    // Phase 30: sync.p4.currentCl also labels the engine card's status row, so
+    // scope this footer assertion to the primary card's own section.
+    const p4Card = screen
+      .getByRole("heading", { name: t("sync.p4.cardTitle") })
+      .closest("section")!;
+    expect(within(p4Card).getByText(t("sync.p4.currentCl"))).toBeDefined();
+    expect(within(p4Card).getByText("381515")).toBeDefined();
   });
 
   it("hides the footer CL value when currentCl is null (no fabricated CL)", () => {
     const t = makeT("en");
     renderWithI18n(<IdlePanel {...baseProps} currentCl={null} />);
-    expect(screen.getByText(t("sync.p4.currentCl"))).toBeDefined();
+    const p4Card = screen
+      .getByRole("heading", { name: t("sync.p4.cardTitle") })
+      .closest("section")!;
+    expect(within(p4Card).getByText(t("sync.p4.currentCl"))).toBeDefined();
     expect(screen.queryByText("—")).toBeNull();
   });
 
@@ -723,5 +736,125 @@ describe("IdlePanel result and warnings card (Phase 26)", () => {
     expect(errorsToggle.getAttribute("aria-expanded")).toBe("true");
     expect(screen.getByText("//depot/e1")).toBeDefined();
     expect(screen.getByText("//depot/w1")).toBeDefined();
+  });
+});
+
+describe("IdlePanel engine-update card (Phase 30 D-08/D-10)", () => {
+  it("renders the engine card title, hint, muted P4 badge, and the update button", () => {
+    const t = makeT("en");
+    renderWithI18n(<IdlePanel {...baseProps} />);
+    const engineSection = screen
+      .getByRole("heading", { name: t("sync.engineP4.cardTitle") })
+      .closest("section")!;
+    expect(within(engineSection).getByText(t("sync.engineP4.cardTitle"))).toBeDefined();
+    expect(within(engineSection).getByText(t("sync.engineP4.cardHint"))).toBeDefined();
+    expect(within(engineSection).getByText(t("sync.badge.p4"))).toBeDefined();
+    expect(
+      screen.getByRole("button", { name: t("sync.engineP4.updateButton") }),
+    ).toBeDefined();
+  });
+
+  it("calls onEngineUpdate exactly once when the update button is clicked", () => {
+    const t = makeT("en");
+    const onEngineUpdate = vi.fn();
+    renderWithI18n(<IdlePanel {...baseProps} onEngineUpdate={onEngineUpdate} />);
+    fireEvent.click(
+      screen.getByRole("button", { name: t("sync.engineP4.updateButton") }),
+    );
+    expect(onEngineUpdate).toHaveBeenCalledTimes(1);
+  });
+
+  it("disables the update button with no workspace and while busy", () => {
+    const t = makeT("en");
+    const { unmount } = renderWithI18n(
+      <IdlePanel {...baseProps} hasWorkspace={false} />,
+    );
+    expect(
+      (
+        screen.getByRole("button", {
+          name: t("sync.engineP4.updateButton"),
+        }) as HTMLButtonElement
+      ).disabled,
+    ).toBe(true);
+    unmount();
+
+    renderWithI18n(<IdlePanel {...baseProps} isBusy={true} />);
+    expect(
+      (
+        screen.getByRole("button", {
+          name: t("sync.engineP4.updateButton"),
+        }) as HTMLButtonElement
+      ).disabled,
+    ).toBe(true);
+  });
+
+  it("renders the raw engine CL when non-null and nothing for null (D-10 hide-null)", () => {
+    const t = makeT("en");
+    const { unmount } = renderWithI18n(
+      <IdlePanel {...baseProps} engineCl="381234" />,
+    );
+    const engineHeading = screen.getByRole("heading", {
+      name: t("sync.engineP4.cardTitle"),
+    });
+    const engineSection = engineHeading.closest("section")!;
+    expect(engineSection.querySelector(".font-mono")?.textContent).toBe("381234");
+    unmount();
+
+    renderWithI18n(<IdlePanel {...baseProps} engineCl={null} />);
+    const heading2 = screen.getByRole("heading", {
+      name: t("sync.engineP4.cardTitle"),
+    });
+    const section2 = heading2.closest("section")!;
+    // No value node at all — the label renders alone, no fabricated CL, no "—".
+    expect(section2.querySelector(".font-mono")).toBeNull();
+  });
+
+  it("is a sibling of the Git card (never nested) and leaves the Git card copy unchanged", () => {
+    const t = makeT("en");
+    renderWithI18n(<IdlePanel {...baseProps} />);
+    const gitHeading = screen.getByRole("heading", {
+      name: t("sync.git.cardTitle"),
+    });
+    const gitSection = gitHeading.closest("section")!;
+    const engineButton = screen.getByRole("button", {
+      name: t("sync.engineP4.updateButton"),
+    });
+    // D-08: the new button is NOT a second button inside the Git card.
+    expect(gitSection.contains(engineButton)).toBe(false);
+
+    // The Git card's title, hint, badge, and pull button are byte-unchanged.
+    expect(screen.getByText(t("sync.git.cardTitle"))).toBeDefined();
+    expect(screen.getByText(t("sync.git.cardHint"))).toBeDefined();
+    expect(screen.getByText(t("sync.badge.git"))).toBeDefined();
+    expect(screen.getByRole("button", { name: t("sync.git.pull") })).toBeDefined();
+  });
+
+  it("sits between the Git card and the five-step disclosure (canonical order)", () => {
+    const t = makeT("en");
+    renderWithI18n(<IdlePanel {...baseProps} />);
+    const gitHeading = screen.getByRole("heading", {
+      name: t("sync.git.cardTitle"),
+    });
+    const engineHeading = screen.getByRole("heading", {
+      name: t("sync.engineP4.cardTitle"),
+    });
+    const pipeline = screen.getByText(t("sync.pipeline.details"));
+    expect(
+      gitHeading.compareDocumentPosition(engineHeading) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(
+      engineHeading.compareDocumentPosition(pipeline) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
+  it("zh smoke: the engine card chrome resolves from the zh dictionary", () => {
+    const tZh = makeT("zh");
+    renderWithI18n(<IdlePanel {...baseProps} />, { locale: "zh" });
+    expect(screen.getByText(tZh("sync.engineP4.cardTitle"))).toBeDefined();
+    expect(
+      screen.getByRole("button", { name: tZh("sync.engineP4.updateButton") }),
+    ).toBeDefined();
   });
 });
