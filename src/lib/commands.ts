@@ -146,6 +146,24 @@ export function stopGitPull(): Promise<void> {
   return invoke("stop_git_pull");
 }
 
+// Phase 30 (D-11): the engine-update IPC surface — the third backend,
+// mirroring the git wrappers above. `engineStatus` returns the engine
+// subtree's own have-CL (null when unavailable) for the D-10 idle status row.
+export function engineUpdate(
+  workspaceId: string,
+  onEvent: Channel<SyncEvent>,
+): Promise<void> {
+  return invoke("engine_update", { workspaceId, onEvent });
+}
+
+export function stopEngineUpdate(): Promise<void> {
+  return invoke("stop_engine_update");
+}
+
+export function engineStatus(workspaceId: string): Promise<string | null> {
+  return invoke("engine_status", { workspaceId });
+}
+
 // HOTUI-14 (Phase 12 D-06/D-07/D-08): operator-facing log affordances.
 // All three resolve the log path Rust-side; the JS only fires the command and
 // (for exportLog) shows the returned destination path. The save dialog inside

@@ -93,6 +93,14 @@ export type LastSyncResult = {
 export type SyncStep = "closeUe" | "closeExcel" | "cleanDevDir" | "p4Sync" | "genProject";
 export type SyncState = "idle" | "running" | "error" | "cancelled";
 export type GitState = "idle" | "running" | "success" | "error";
+/**
+ * Phase 30 (D-11): the engine-update state union. Structurally distinct from
+ * `GitState` — the engine path has a FOURTH terminal state, `"partial"`
+ * (sync succeeded, then GenerateProjectFiles failed), which can never occur
+ * for git. `GitState` is deliberately not widened (UI-SPEC §9.4) so the git
+ * component's three-state union and its goldens stay byte-immutable.
+ */
+export type EngineUpdateState = "idle" | "running" | "success" | "error" | "partial";
 
 export interface GitBranchInfo {
   branch: string;
