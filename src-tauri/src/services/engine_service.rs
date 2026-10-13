@@ -29,9 +29,13 @@ use crate::services::operation_lock::{Operation, OperationLock};
 use crate::services::p4_executor::P4Executor;
 use crate::services::process_manager::ProcessManager;
 use crate::utils::counting_channel::CountingChannel;
+use std::path::Path;
 use std::sync::Arc;
-use tauri_plugin_log::log::{info, warn};
+use tauri_plugin_log::log::{error, info, warn};
 use tokio_util::sync::CancellationToken;
+
+#[cfg(target_os = "windows")]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
 
 /// D-03: the three outcomes the genProject step can take, decided from the two
 /// facts available at that point.
@@ -213,6 +217,203 @@ impl EngineService {
             "[engineUpdate] sync complete, cl={:?}, files={}",
             cl, files_synced
         );
+
+        // genProject step (D-03). Derive the shared bat path, decide the outcome
+        // from the two facts available, and dispatch.
+        let root = Path::new(&workspace.root_path);
+        let bat_path = root.join("UnrealEngine/GenerateProjectFiles.bat");
+
+        let outcome = gen_project_outcome(bat_path.exists(), cancel_token.is_cancelled());
+        match outcome {
+            // A cancel that landed between `SyncCompleted` and this spawn: skip
+            // genProject entirely. `SyncCompleted` is already the single terminal
+            // event, so this path emits no second one and leaves no running state.
+            GenOutcome::SkippedCancelled => {
+                self.process_manager.clear_tracked().await;
+                info!("[engineUpdate] genProject skipped (cancelled after sync)");
+                Ok(())
+            }
+            // Fatal for the genProject step only (D-03): the sync's success was
+            // already reported as `SyncCompleted`; now the missing bat denies
+            // only the step that produces project files. NO `StepCompleted` is
+            // emitted on this path — the pair the frontend recognizes is exactly
+            // `SyncCompleted` then `SyncFailed{step:"genProject"}`.
+            GenOutcome::FatalMissingBat => {
+                error!("[genProject] bat file not found: {}", bat_path.display());
+                let _ = channel.send(SyncEvent::SyncFailed {
+                    step: "genProject".to_string(),
+                    error: AppError::CommandFailed {
+                        step: "genProject".to_string(),
+                        exit_code: None,
+                    }
+                    .to_string(),
+                });
+                Err(AppError::CommandFailed {
+                    step: "genProject".to_string(),
+                    exit_code: None,
+                })
+            }
+            GenOutcome::Run => self.run_gen_project(workspace, channel).await,
+        }
+    }
+
+    /// Run `GenerateProjectFiles.bat` — the **fatal** version D-03 chooses
+    /// (lifted from `sync_orchestrator::gen_project`, not
+    /// `git_service::run_gen_project`'s non-fatal skip).
+    ///
+    /// A cancel that arrives DURING this step needs no new branch:
+    /// `stop_engine_update` → `ProcessManager::stop_all()` cancels the token and
+    /// `taskkill`s the tracked `cmd` pid, so `child.wait()` returns a non-success
+    /// status and the path below emits `StepCompleted{genProject,false}` +
+    /// `SyncFailed{step:"genProject"}` — the engine did update, the project files
+    /// did not, and the panel renders `partial`.
+    async fn run_gen_project(
+        &self,
+        workspace: &WorkspaceConfig,
+        channel: &CountingChannel,
+    ) -> Result<(), AppError> {
+        // Reuses the existing frozen ("genProject","gen") token — no new token.
+        let _ = channel.send(SyncEvent::StepStarted {
+            step: "genProject".to_string(),
+            description: "Generating project files...".to_string(),
+            sub_step: Some("gen".to_string()),
+        });
+
+        let root = Path::new(&workspace.root_path);
+        let bat_path = root.join("UnrealEngine/GenerateProjectFiles.bat");
+        let work_dir = root.join("UnrealEngine");
+        info!(
+            "[genProject] bat_path={}, work_dir={}",
+            bat_path.display(),
+            work_dir.display()
+        );
+
+        // T-30-08: the executed path is a fixed relative literal appended to a
+        // persisted workspace root, and `current_dir` is pinned to the
+        // `UnrealEngine/` sibling. The bat path is passed as a single `args`
+        // element, never interpolated into a shell string, so no user-controlled
+        // token reaches the interpreter's command line.
+        let mut child = tokio::process::Command::new("cmd")
+            .args(["/C", &bat_path.to_string_lossy()])
+            .current_dir(&work_dir)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .creation_flags(CREATE_NO_WINDOW)
+            .spawn()
+            .map_err(AppError::ProcessSpawn)?;
+
+        if let Some(id) = child.id() {
+            self.process_manager.track_pid(id).await;
+        }
+
+        use tokio::io::{AsyncBufReadExt, BufReader};
+        let stdout = child.stdout.take().unwrap();
+        let stderr = child.stderr.take().unwrap();
+
+        let ch_out = channel.clone();
+        let stdout_task = tokio::spawn(async move {
+            let mut lines = BufReader::new(stdout).lines();
+            let mut log_buf: Vec<String> = Vec::with_capacity(256);
+            let mut last_log_flush = std::time::Instant::now();
+            while let Ok(Some(line)) = lines.next_line().await {
+                log_buf.push(line);
+                let should_flush_log = log_buf.len() >= 500
+                    || last_log_flush.elapsed() >= std::time::Duration::from_millis(200);
+                if should_flush_log {
+                    let batch = std::mem::take(&mut log_buf);
+                    let _ = ch_out.send(SyncEvent::LogBatch {
+                        lines: batch,
+                        stream: "stdout".to_string(),
+                    });
+                    last_log_flush = std::time::Instant::now();
+                }
+            }
+            if !log_buf.is_empty() {
+                let _ = ch_out.send(SyncEvent::LogBatch {
+                    lines: log_buf,
+                    stream: "stdout".to_string(),
+                });
+            }
+            // HOTUI-12: one per-completion counter summary per drain per run.
+            // log_enabled! guard mandatory (HOTUI-13 eager-eval rule).
+            if log::log_enabled!(log::Level::Debug) {
+                crate::utils::log::debug!(
+                    "ipc.channel drain complete stream=stdout sent_total={}",
+                    ch_out.count()
+                );
+            }
+        });
+
+        let ch_err = channel.clone();
+        let stderr_task = tokio::spawn(async move {
+            let mut lines = BufReader::new(stderr).lines();
+            let mut log_buf: Vec<String> = Vec::with_capacity(64);
+            let mut last_log_flush = std::time::Instant::now();
+            while let Ok(Some(line)) = lines.next_line().await {
+                log_buf.push(line);
+                let should_flush_log = log_buf.len() >= 500
+                    || last_log_flush.elapsed() >= std::time::Duration::from_millis(200);
+                if should_flush_log {
+                    let batch = std::mem::take(&mut log_buf);
+                    let _ = ch_err.send(SyncEvent::LogBatch {
+                        lines: batch,
+                        stream: "stderr".to_string(),
+                    });
+                    last_log_flush = std::time::Instant::now();
+                }
+            }
+            if !log_buf.is_empty() {
+                let _ = ch_err.send(SyncEvent::LogBatch {
+                    lines: log_buf,
+                    stream: "stderr".to_string(),
+                });
+            }
+            // HOTUI-12: one per-completion counter summary per drain per run.
+            if log::log_enabled!(log::Level::Debug) {
+                crate::utils::log::debug!(
+                    "ipc.channel drain complete stream=stderr sent_total={}",
+                    ch_err.count()
+                );
+            }
+        });
+
+        let status = child.wait().await.map_err(AppError::ProcessSpawn)?;
+        self.process_manager.clear_tracked().await;
+
+        // T-30-09: abort the reader tasks instead of awaiting them.
+        // GenerateProjectFiles.bat invokes MSBuild with /nodeReuse:true, which
+        // spawns dotnet.exe server processes that inherit the pipe handles and
+        // stay alive indefinitely. Awaiting the readers would hang forever
+        // because BufReader::lines() never sees EOF while those servers hold the
+        // pipes open. By this point the actual batch process has exited and all
+        // meaningful output has already been sent.
+        stdout_task.abort();
+        stderr_task.abort();
+
+        if !status.success() {
+            let _ = channel.send(SyncEvent::StepCompleted {
+                step: "genProject".to_string(),
+                success: false,
+            });
+            let _ = channel.send(SyncEvent::SyncFailed {
+                step: "genProject".to_string(),
+                error: AppError::CommandFailed {
+                    step: "genProject".to_string(),
+                    exit_code: status.code(),
+                }
+                .to_string(),
+            });
+            return Err(AppError::CommandFailed {
+                step: "genProject".to_string(),
+                exit_code: status.code(),
+            });
+        }
+
+        let _ = channel.send(SyncEvent::StepCompleted {
+            step: "genProject".to_string(),
+            success: true,
+        });
         Ok(())
     }
 
@@ -274,6 +475,56 @@ mod tests {
                 GenOutcome::SkippedCancelled => "skippedCancelled",
                 GenOutcome::FatalMissingBat => "fatalMissingBat",
             };
+        }
+    }
+
+    #[test]
+    fn test_gen_project_missing_bat_is_terminal_failure_after_sync() {
+        // A missing bat can NEVER map to Run — it can never be a silent success
+        // (this is the whole point of D-03's divergence from git_service).
+        assert_eq!(
+            gen_project_outcome(false, false),
+            GenOutcome::FatalMissingBat,
+            "a missing bat must never map to Run"
+        );
+
+        // The three GenOutcome arms, matched exhaustively, produce (in order):
+        //   SkippedCancelled -> Ok(())                     (no second terminal event)
+        //   FatalMissingBat  -> Err(CommandFailed{genProject})  (after SyncCompleted)
+        //   Run (bat exits non-zero) -> Err(CommandFailed{genProject})
+        // Only the SkippedCancelled arm yields a clean return.
+        let cases: [GenOutcome; 3] = [
+            GenOutcome::SkippedCancelled,
+            GenOutcome::FatalMissingBat,
+            GenOutcome::Run,
+        ];
+        let results: Vec<Result<(), AppError>> = cases
+            .iter()
+            .map(|outcome| match outcome {
+                GenOutcome::SkippedCancelled => Ok(()),
+                GenOutcome::FatalMissingBat => Err(AppError::CommandFailed {
+                    step: "genProject".to_string(),
+                    exit_code: None,
+                }),
+                // The Run arm's return when the bat exits non-zero.
+                GenOutcome::Run => Err(AppError::CommandFailed {
+                    step: "genProject".to_string(),
+                    exit_code: Some(1),
+                }),
+            })
+            .collect();
+
+        assert!(
+            results[0].is_ok(),
+            "only the SkippedCancelled arm returns a clean Ok"
+        );
+        for r in &results[1..] {
+            match r {
+                Err(AppError::CommandFailed { step, .. }) => {
+                    assert_eq!(step.as_str(), "genProject")
+                }
+                other => panic!("expected CommandFailed{{genProject}}, got {other:?}"),
+            }
         }
     }
 }
