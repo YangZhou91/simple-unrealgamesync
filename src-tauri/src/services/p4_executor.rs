@@ -342,6 +342,43 @@ pub fn build_force_sync_args() -> Vec<String> {
     ]
 }
 
+/// Build the `p4 sync` arg vector for the P4 engine update (D-01/D-02/D-05/D-06).
+///
+/// Emits exactly `sync [--parallel=threads=N] UnrealEngine/Engine/...`:
+/// - **One** relative path, no exclusions (D-02/D-04). The relative form resolves
+///   through the shared `p4 -s -C utf8 -c <client> -d <root>` globals exactly as
+///   `build_force_sync_args`'s bare `UnrealEngine/Engine/...` paths do (D-01);
+///   the path is load-bearing — the client spec carries the view mapping, so no
+///   depot path or user-supplied path may appear here (T-30-04).
+/// - No `-f` (D-05): a plain sync is the direct analogue of the Git path's
+///   fast-forward. The client spec carries `allwrite clobber`, so `-f` would
+///   only re-transfer already-current files and revert locally built
+///   `Engine/Binaries` DLLs to depot state on every run.
+/// - `--parallel=threads=N` only when `N > 1`, mirroring `build_p4_sync_args`
+///   (D-06). The `--parallel` flag is silently disabled without `-I`, so the
+///   caller's spawn (`engine_sync`) keeps `-I`.
+///
+/// No exclusions: `Engine/Binaries` is synced in full because the depot carries
+/// prebuilt third-party binaries that gitea also maps (D-04).
+pub fn build_engine_sync_args(parallel_threads: u32) -> Vec<String> {
+    let mut args = vec!["sync".to_string()];
+    if parallel_threads > 1 {
+        args.push(format!("--parallel=threads={}", parallel_threads));
+    }
+    args.push("UnrealEngine/Engine/...".to_string());
+    args
+}
+
+/// Insert a `sync` subcommand flag (`-n` for the dry-run count, `-N` for the
+/// byte estimate) immediately after the `sync` subcommand at index 1. The single
+/// place the `-n`/`-N` insertion happens, so the existing public denominator fns
+/// and the new engine-scoped siblings share one shape (and one test seam).
+fn insert_sync_flag(args: &[String], flag: &str) -> Vec<String> {
+    let mut out = args.to_vec();
+    out.insert(1, flag.to_string());
+    out
+}
+
 /// Defensive parser for the `p4 sync -N` total transfer bytes (quick-260701-ep7,
 /// rewritten quick-260706-ow2, multi-line summation quick-260706-pvk). The real
 /// `-N` summary is one line per depot subpath of the shape `Server network
@@ -1422,6 +1459,42 @@ impl P4Executor {
         cancel: CancellationToken,
         process_manager: Option<Arc<ProcessManager>>,
     ) -> Result<u64, AppError> {
+        // Build the SAME args the real sync uses, then insert -n (dry-run count)
+        // after "sync" (don't use -I for dry run — no transfer, no progress).
+        // Delegates to the shared `dry_run_sync_with_args` so the engine-scoped
+        // `count_engine_sync` reuses exactly one body; the public signature and
+        // behaviour are unchanged, so the three existing call sites stay
+        // byte-identical (delegation guard).
+        let full_args = insert_sync_flag(
+            &build_p4_sync_args(
+                options,
+                &workspace.root_path,
+                &workspace.project_dir,
+                &options.target_cl,
+            ),
+            "-n",
+        );
+        self.dry_run_sync_with_args(workspace, &full_args, cancel, process_manager)
+            .await
+    }
+
+    /// Dry-run (`p4 sync -n`) file-count pass over an already-built arg vector
+    /// (the former `dry_run_sync` body, with the arg construction lifted out so
+    /// both the project sync via `dry_run_sync` and the engine update via
+    /// `count_engine_sync` share one spawn/parse/timeout contract).
+    ///
+    /// Preserves every existing contract verbatim: the `step=dryRun` StepScope
+    /// and its done/failed/cancelled markers, `build_p4_command`,
+    /// `spawn_with_retry` (stderr null), `track_pid`, the render_* lifecycle
+    /// lines, the 120 s timeout, the `parse_sync_file_count` counting, `Ok(0)`
+    /// on non-success, `Ok(0)` on timeout, `Err(AppError::Cancelled)` on cancel.
+    async fn dry_run_sync_with_args(
+        &self,
+        workspace: &WorkspaceConfig,
+        full_args: &[String],
+        cancel: CancellationToken,
+        process_manager: Option<Arc<ProcessManager>>,
+    ) -> Result<u64, AppError> {
         // D-14: the behind-check dry-run is its own `step=dryRun`. StepScope
         // emits `step=dryRun starting` here and a terminal `done`/`failed`/
         // `cancelled`/`dropped` line with elapsed on Drop — on EVERY return path
@@ -1430,16 +1503,6 @@ impl P4Executor {
         // still emits a greppable `dropped` terminal so a forgotten path stays
         // distinct from a real hang (which has NO terminal at all).
         let _dry_scope = StepScope::new("dryRun");
-
-        // Don't use -I for dry run (no actual transfer, no progress needed)
-        let args = build_p4_sync_args(
-            options,
-            &workspace.root_path,
-            &workspace.project_dir,
-            &options.target_cl,
-        );
-        let mut full_args = args.clone();
-        full_args.insert(1, "-n".to_string()); // Insert after "sync" subcommand
 
         let args_refs: Vec<&str> = full_args.iter().map(|s| s.as_str()).collect();
 
@@ -1570,15 +1633,31 @@ impl P4Executor {
     ) -> Option<u64> {
         // Build the SAME args the real sync uses (depot paths / CL / parallel),
         // then insert -N (network summary) after "sync" — mirrors dry_run_sync's
-        // -n insertion shape.
-        let args = build_p4_sync_args(
-            options,
-            &workspace.root_path,
-            &workspace.project_dir,
-            &options.target_cl,
+        // -n insertion shape. Delegates to the shared
+        // `sync_n_total_bytes_with_args`; the public signature/behaviour are
+        // unchanged, so the existing call site stays byte-identical.
+        let full_args = insert_sync_flag(
+            &build_p4_sync_args(
+                options,
+                &workspace.root_path,
+                &workspace.project_dir,
+                &options.target_cl,
+            ),
+            "-N",
         );
-        let mut full_args = args.clone();
-        full_args.insert(1, "-N".to_string());
+        self.sync_n_total_bytes_with_args(workspace, &full_args)
+            .await
+    }
+
+    /// `p4 sync -N` byte-estimate pass over an already-built arg vector (the
+    /// former `sync_n_total_bytes` body, with the arg construction lifted out so
+    /// the engine-scoped `engine_sync_total_bytes` reuses one shape). Preserves
+    /// the 60 s timeout and the "every failure maps to None" contract verbatim.
+    async fn sync_n_total_bytes_with_args(
+        &self,
+        workspace: &WorkspaceConfig,
+        full_args: &[String],
+    ) -> Option<u64> {
         let args_refs: Vec<&str> = full_args.iter().map(|s| s.as_str()).collect();
 
         // T-ep7-02: 60s timeout — any failure below short-circuits to None via
@@ -1616,6 +1695,40 @@ impl P4Executor {
         // format differs).
         info!("[sync-N] bytes_total parsed: {:?}", parsed);
         parsed
+    }
+
+    /// Engine-scoped `p4 sync -n UnrealEngine/Engine/...` count pass (D-07).
+    /// Reuses `dry_run_sync_with_args` so the 120 s timeout and the
+    /// "never gate the update" contract (`Ok(0)` on non-success/timeout) are
+    /// shared with the project sync. A `-n` failure degrades the engine bar to
+    /// indeterminate; the real `engine_sync` still proceeds.
+    pub async fn count_engine_sync(
+        &self,
+        workspace: &WorkspaceConfig,
+        parallel_threads: u32,
+        cancel: CancellationToken,
+        process_manager: Option<Arc<ProcessManager>>,
+    ) -> Result<u64, AppError> {
+        let full_args = insert_sync_flag(&build_engine_sync_args(parallel_threads), "-n");
+        self.dry_run_sync_with_args(workspace, &full_args, cancel, process_manager)
+            .await
+    }
+
+    /// Engine-scoped `p4 sync -N UnrealEngine/Engine/...` byte estimate.
+    ///
+    /// Intentionally **not** invoked by the engine update path this phase
+    /// (30-UI-SPEC.md §14): the engine bar is count-driven and `bytesTotal`
+    /// stays null. It ships so the `-N` primitive stays reusable and symmetric
+    /// with `-n` — do not wire it into `EngineService::update` and do not emit
+    /// byte fields onto any `Progress` event.
+    pub async fn engine_sync_total_bytes(
+        &self,
+        workspace: &WorkspaceConfig,
+        parallel_threads: u32,
+    ) -> Option<u64> {
+        let full_args = insert_sync_flag(&build_engine_sync_args(parallel_threads), "-N");
+        self.sync_n_total_bytes_with_args(workspace, &full_args)
+            .await
     }
 
     pub async fn get_changelists(
@@ -4246,6 +4359,86 @@ exit: 0
         assert!(
             !args.iter().any(|a| a.contains("--parallel")),
             "force sync must NOT have --parallel flag"
+        );
+    }
+
+    // --- Tests for build_engine_sync_args (Phase 30 / D-01/D-02/D-05/D-06) ---
+
+    #[test]
+    fn test_build_engine_sync_args_one_thread_exact() {
+        // Single-threaded: no --parallel entry, exactly [sync, path].
+        assert_eq!(
+            build_engine_sync_args(1),
+            vec!["sync", "UnrealEngine/Engine/..."]
+        );
+    }
+
+    #[test]
+    fn test_build_engine_sync_args_parallel_exact() {
+        // >1 thread: --parallel=threads=N lands at index 1, after "sync".
+        assert_eq!(
+            build_engine_sync_args(8),
+            vec!["sync", "--parallel=threads=8", "UnrealEngine/Engine/..."]
+        );
+    }
+
+    #[test]
+    fn test_build_engine_sync_args_no_force_flag() {
+        for threads in [0u32, 1, 4, 8] {
+            let args = build_engine_sync_args(threads);
+            assert!(
+                !args.contains(&"-f".to_string()),
+                "engine sync must NOT carry -f (D-05) for threads={threads}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_build_engine_sync_args_single_path_entry() {
+        // Exactly one depot path entry — never more (D-02: one path, no exclusions).
+        for threads in [0u32, 1, 8] {
+            let args = build_engine_sync_args(threads);
+            let path_entries = args.iter().filter(|a| a.ends_with("...")).count();
+            assert_eq!(path_entries, 1, "exactly one path entry for threads={threads}");
+            assert_eq!(args[0], "sync", "first arg must be 'sync'");
+        }
+    }
+
+    #[test]
+    fn test_build_engine_sync_args_no_parallel_for_zero_threads() {
+        let args = build_engine_sync_args(0);
+        assert!(
+            !args.iter().any(|a| a.contains("--parallel")),
+            "0 threads must not add --parallel (guard is > 1)"
+        );
+    }
+
+    #[test]
+    fn test_build_engine_sync_args_no_parallel_for_one_thread() {
+        let args = build_engine_sync_args(1);
+        assert!(
+            !args.iter().any(|a| a.contains("--parallel")),
+            "1 thread must not add --parallel (guard is > 1)"
+        );
+    }
+
+    // --- Tests for insert_sync_flag (the shared -n/-N seam) ---
+
+    #[test]
+    fn test_insert_sync_flag_places_n_after_sync() {
+        let args = vec!["sync".to_string(), "UnrealEngine/Engine/...".to_string()];
+        assert_eq!(
+            insert_sync_flag(&args, "-n"),
+            vec!["sync", "-n", "UnrealEngine/Engine/..."]
+        );
+    }
+
+    #[test]
+    fn test_insert_sync_flag_places_capital_n_after_sync() {
+        let args = vec!["sync".to_string(), "UnrealEngine/Engine/...".to_string()];
+        assert_eq!(
+            insert_sync_flag(&args, "-N"),
+            vec!["sync", "-N", "UnrealEngine/Engine/..."]
         );
     }
 
