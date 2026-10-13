@@ -81,6 +81,10 @@ interface SyncDashboardProps {
   engineCurrentStep?: string | null;
   engineCurrentSubStep?: string | null;
   engineResultCl?: string | null;
+  // Phase 30 (30-05): the engine in-place cancel-pending lock (UI-SPEC §8.3).
+  // Optional with a false default so the existing test fixture keeps
+  // type-checking — App.tsx threads the hook's `isCancelling`.
+  engineIsCancelling?: boolean;
   onEngineUpdate?: () => void;
   onStopEngineUpdate?: () => void;
   onDismissEngineResult?: () => void;
@@ -135,6 +139,7 @@ export function SyncDashboard({
   engineCurrentStep = null,
   engineCurrentSubStep = null,
   engineResultCl = null,
+  engineIsCancelling = false,
   onEngineUpdate = () => {},
   onStopEngineUpdate = () => {},
   onDismissEngineResult = () => {},
@@ -192,6 +197,7 @@ export function SyncDashboard({
             currentStep={engineCurrentStep}
             currentSubStep={engineCurrentSubStep}
             resultCl={engineResultCl}
+            isCancelling={engineIsCancelling}
             onCancel={onStopEngineUpdate}
             onBack={onDismissEngineResult}
             onRetry={onRetryEngineUpdate}

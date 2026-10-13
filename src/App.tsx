@@ -355,6 +355,7 @@ function App() {
             engineCurrentStep={engine.currentStep}
             engineCurrentSubStep={engine.currentSubStep}
             engineResultCl={engine.resultCl}
+            engineIsCancelling={engine.isCancelling}
             engineCl={engineCl}
             onEngineUpdate={handleEngineUpdate}
             onStopEngineUpdate={engine.stopEngineUpdate}

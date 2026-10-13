@@ -132,6 +132,45 @@ async function runCanonicalScript(
   await gitBackButton.click();
   await expect(page.getByText(t("sync.p4.cardTitle"))).toBeVisible();
 
+  // Canonical step 8b (Phase 30, ENGU-02 / D-12): the P4 engine update reaches
+  // its running surface and holds the shared operation lock. While it runs the
+  // idle host of the Start Sync and Git Pull buttons is replaced by the engine
+  // panel (so both actions are unreachable — the strongest form of the
+  // three-way mutual exclusion), and the sidebar Settings lock probe the sync
+  // leg uses is held disabled, proving the engine is inside isOperationRunning.
+  await setNextScenario(page, "engine-cancel-hold");
+  await page
+    .getByRole("button", { name: t("sync.engineP4.updateButton") })
+    .click();
+  const engineCancelButton = page.getByRole("button", { name: t("sync.engineP4.cancel") });
+  await expect(engineCancelButton).toBeVisible();
+  await expect(page.getByText(t("sync.engineP4.runningTitle"))).toBeVisible();
+  await expect(page.getByRole("button", { name: t("sync.start") })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: t("sync.git.pull") })).toHaveCount(0);
+  await expect(settingsButton).toBeDisabled();
+
+  // Canonical step 8c: the engine in-place cancel-pending handshake — Cancel
+  // Update flips the button to the disabled Cancelling… state; releaseCancel
+  // delivers the deferred terminal and the idle engine card returns.
+  await engineCancelButton.click();
+  await expect(
+    page.getByRole("button", { name: t("sync.cancelling") }),
+  ).toBeDisabled();
+  await releaseCancel(page);
+  await expect(page.getByText(t("sync.engineP4.cardTitle"))).toBeVisible();
+
+  // Canonical step 8d (D-11): the partial state — the engine's real success and
+  // the genProject failure render TOGETHER (the ordered pair never collapses
+  // into a plain error), then Back to Idle returns to the idle card.
+  await setNextScenario(page, "engine-partial");
+  await page
+    .getByRole("button", { name: t("sync.engineP4.updateButton") })
+    .click();
+  await expect(page.getByText(t("sync.engineP4.success"))).toBeVisible();
+  await expect(page.getByText(t("sync.engineP4.partial"))).toBeVisible();
+  await page.getByRole("button", { name: t("sync.engineP4.back") }).click();
+  await expect(page.getByText(t("sync.engineP4.cardTitle"))).toBeVisible();
+
   // Canonical step 9: rollback — Next disabled with no CL, select 381204,
   // distinct destructive confirmation, confirm runs to completion.
   await page.getByRole("tab", { name: t("sync.tab.history") }).click();

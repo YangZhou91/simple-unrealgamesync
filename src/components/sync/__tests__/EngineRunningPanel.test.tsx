@@ -55,6 +55,20 @@ describe("EngineRunningPanel running surface", () => {
     expect(screen.queryByText(t("sync.git.checking"))).toBeNull();
   });
 
+  it("isCancelling replaces Cancel Update in place with one disabled typed Cancelling button", () => {
+    const t = makeT("en");
+    renderWithI18n(<EngineRunningPanel {...baseProps} isCancelling />);
+    // Exactly one button, natively disabled, carrying the typed label.
+    const cancelling = screen.getByRole("button", { name: t("sync.cancelling") });
+    expect((cancelling as HTMLButtonElement).disabled).toBe(true);
+    // The interactive Cancel Update path is gone while cancelling.
+    expect(
+      screen.queryByRole("button", { name: t("sync.engineP4.cancel") }),
+    ).toBeNull();
+    // Loader2 spinner rendered inside (matches the Phase-26 §7 contract).
+    expect(cancelling.querySelector("svg")).not.toBeNull();
+  });
+
   it("renders the count-driven determinate bar for a real denominator", () => {
     const t = makeT("en");
     renderWithI18n(

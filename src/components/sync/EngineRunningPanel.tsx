@@ -1,7 +1,7 @@
 import { LogViewer } from "./LogViewer";
 import { ProgressSection } from "./ProgressSection";
 import { Button } from "@/components/ui/button";
-import { ArrowLeft, CheckCircle, Terminal, XCircle } from "lucide-react";
+import { ArrowLeft, CheckCircle, Loader2, Terminal, XCircle } from "lucide-react";
 import { useStepLabels, useT } from "@/lib/i18n";
 import type { EngineUpdateState } from "@/lib/types";
 
@@ -14,6 +14,12 @@ interface EngineRunningPanelProps {
   onCancel?: () => void;
   onBack?: () => void;
   onRetry?: () => void;
+  // Phase 30 (30-05, UI-SPEC §8.3): the in-place cancel-pending lock. While
+  // true the Cancel Update button is replaced in place by the natively
+  // disabled `sync.cancelling` button with a spinner (the Phase-26 §7
+  // contract). Optional with a false default so existing fixtures keep
+  // type-checking — App.tsx threads the hook's `isCancelling` at runtime.
+  isCancelling?: boolean;
   // D-07 count-driven progress. Optional with a zero default (the repo's
   // convention at GitRunningPanel.tsx:10-29) so fixtures keep type-checking.
   progress?: { current: number; total: number; currentFile: string };
@@ -53,6 +59,7 @@ export function EngineRunningPanel({
   onCancel = () => {},
   onBack = () => {},
   onRetry = () => {},
+  isCancelling = false,
   progress = { current: 0, total: 0, currentFile: "" },
   currentStep = null,
   currentSubStep = null,
@@ -103,9 +110,20 @@ export function EngineRunningPanel({
               </span>
             </div>
           </div>
-          <Button variant="outline" onClick={onCancel} className="h-9 shrink-0 px-6">
-            {t("sync.engineP4.cancel")}
-          </Button>
+          {/* Phase 30 (30-05): the in-place cancel-pending contract — one
+              click replaces the button with the natively disabled
+              `sync.cancelling` spinner (UI-SPEC §8.3 / Phase-26 §7). Never a
+              second cancel, never an optimistic idle. */}
+          {isCancelling ? (
+            <Button variant="outline" disabled className="h-9 shrink-0 px-6">
+              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              {t("sync.cancelling")}
+            </Button>
+          ) : (
+            <Button variant="outline" onClick={onCancel} className="h-9 shrink-0 px-6">
+              {t("sync.engineP4.cancel")}
+            </Button>
+          )}
         </div>
       )}
 

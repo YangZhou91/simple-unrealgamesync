@@ -32,6 +32,10 @@ export function useEngineUpdate() {
   // The CL from `syncCompleted` — the *result* CL, distinct from the card's
   // live have-CL that App owns (engineCl).
   const [resultCl, setResultCl] = useState<string | null>(null);
+  // Phase 30 (30-05): the in-place cancel-pending state (UI-SPEC §8.3, the
+  // Phase-26 §7 contract). Set when a cancel is requested; cleared by any
+  // terminal event and on start / dismiss, so the button never sticks.
+  const [isCancelling, setIsCancelling] = useState(false);
   // WIRE-01: store machine (step, subStep) keys; the panel looks up dictionary
   // copy at render. Never copy StepStarted prose into UI state.
   const [currentStep, setCurrentStep] = useState<string | null>(null);
@@ -95,16 +99,19 @@ export function useEngineUpdate() {
           completedRef.current = true;
           setResultCl(event.data.changelist);
           setEngineState("success");
+          setIsCancelling(false);
           break;
         case "syncFailed":
           setErrorInfo({ error: event.data.error });
           // The ordered pair (SyncCompleted then SyncFailed{genProject}) is a
           // PARTIAL success, not a plain error. A lone failure stays "error".
           setEngineState(completedRef.current ? "partial" : "error");
+          setIsCancelling(false);
           break;
         case "syncCancelled":
           // Dismiss-equivalent, mirroring useGit.ts:72-74.
           setEngineState("idle");
+          setIsCancelling(false);
           break;
         case "stepCompleted":
           // Terminal events above decide the final state.
@@ -134,6 +141,7 @@ export function useEngineUpdate() {
       setCurrentStep(null);
       setCurrentSubStep(null);
       completedRef.current = false;
+      setIsCancelling(false);
       setEngineState("running");
       startFlushTimer();
       try {
@@ -151,8 +159,11 @@ export function useEngineUpdate() {
   );
 
   const stopEngineUpdate = useCallback(async () => {
-    // Let the syncCancelled/syncFailed event handler set the final state.
+    // UI-SPEC §8.3 / Phase-26 §7: the cancel is one-shot — flip the in-place
+    // disabled "Cancelling…" state immediately, then let the
+    // syncCancelled/syncFailed event handler reset it and set the final state.
     // A second call is a no-op: the backend's stop_all finds nothing tracked.
+    setIsCancelling(true);
     await commands.stopEngineUpdate();
   }, []);
 
@@ -165,6 +176,7 @@ export function useEngineUpdate() {
     setCurrentStep(null);
     setCurrentSubStep(null);
     completedRef.current = false;
+    setIsCancelling(false);
   }, []);
 
   // Visibility/focus reconcile (mirrors useSync.ts:136-168, but no 5 s poll —
@@ -213,6 +225,7 @@ export function useEngineUpdate() {
     resultCl,
     currentStep,
     currentSubStep,
+    isCancelling,
     startEngineUpdate,
     stopEngineUpdate,
     dismissEngineResult,

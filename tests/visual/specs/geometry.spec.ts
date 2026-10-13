@@ -1,9 +1,9 @@
-// Phase 23 (23-02, CONTRACT-02) → Phase 29 (29-01, PAR-01): the geometry
-// matrix — the ported canonical measure() oracle (helpers/measure.ts) swept
-// across 72 combinations (9 surfaces x dark/light x 1056/768/392/352, height
-// 1300) plus the focused states, asserting zero out-of-bounds visible elements
-// per combination — in BOTH locales (zh ledger ids byte-identical, en ids
-// suffixed -en; 144 matrix rows + 24 focused rows = 168).
+// Phase 23 (23-02, CONTRACT-02) → Phase 29 (29-01, PAR-01) → Phase 30 (30-05):
+// the geometry matrix — the ported canonical measure() oracle (helpers/measure.ts)
+// swept across 80 combinations (10 surfaces x dark/light x 1056/768/392/352,
+// height 1300) plus the focused states, asserting zero out-of-bounds visible
+// elements per combination — in BOTH locales (zh ledger ids byte-identical, en
+// ids suffixed -en; 160 matrix rows + 34 focused rows = 194).
 //
 // D-04 separation: this file contains ZERO screenshot expectations — pixels
 // are Plan 03 (visual.spec.ts). Geometry is zero-tolerance and font-agnostic.
@@ -16,6 +16,7 @@ import { measureBounds } from "../helpers/measure";
 import {
   gotoHarness,
   openSettingsAppTab,
+  setEngineFocusedView,
   setTheme,
   setViewportSize,
   setView,
@@ -26,7 +27,7 @@ import {
   type HarnessLocale,
 } from "../helpers/navigation";
 
-/** The 9 matrix surfaces — CONTRACT-02: 9 x 2 themes x 4 widths = 72. */
+/** The 10 matrix surfaces — Phase 30 (30-05): `engine-running` added to the 9. */
 const MATRIX_VIEWS: MatrixView[] = [
   "idle",
   "running",
@@ -34,6 +35,7 @@ const MATRIX_VIEWS: MatrixView[] = [
   "error",
   "git-running",
   "git-error",
+  "engine-running",
   "history",
   "health",
   "settings",
@@ -265,6 +267,59 @@ for (const locale of LOCALES) {
       await page.getByRole("button", { name: t("sync.git.pull") }).click();
       await expect(page.getByText(t("sync.git.success"))).toBeVisible();
       await assertCleanAndInBounds(page, fid("git-success-dark-1056"));
+    });
+
+    // Phase 30 (30-05): the browser-proven engine terminal states. success /
+    // error / partial at 1056 (the D-11 partial card included), each reached by
+    // a real click on the idle engine card through the production hook.
+    for (const engineView of ["engine-success", "engine-error", "engine-partial"] as const) {
+      const id = fid(`${engineView}-dark-1056`);
+      test(`focused: ${engineView} dark-1056`, async ({ page }) => {
+        await setTheme(page, "dark");
+        await setViewportSize(page, 1056);
+        await gotoHarness(page, { locale });
+        await setEngineFocusedView(page, engineView, locale);
+        await assertCleanAndInBounds(page, id);
+      });
+    }
+
+    // engine-partial at 352 — the D-11 dual-role card's narrow backstop: both
+    // regions, the raw genProject error and the Retry/Back row must wrap inside
+    // the card without overflowing.
+    test("focused: engine-partial dark-352", async ({ page }) => {
+      await setTheme(page, "dark");
+      await setViewportSize(page, 352);
+      await gotoHarness(page, { locale });
+      await setEngineFocusedView(page, "engine-partial", locale);
+      await assertCleanAndInBounds(page, fid("engine-partial-dark-352"));
+    });
+
+    // engine-cancel-pending: running under engine-cancel-hold, Cancel Update
+    // clicked, the in-place disabled "Cancelling…" button held — the engine
+    // variant of cancel-pending-dark-1056 above (UI-SPEC §8.3).
+    test("focused: engine-cancel-pending dark-1056", async ({ page }) => {
+      await setTheme(page, "dark");
+      await setViewportSize(page, 1056);
+      await gotoHarness(page, { locale });
+      await page.evaluate(
+        (scenario) =>
+          (
+            window as unknown as {
+              __HARNESS__: { setNextScenario: (s: string) => void };
+            }
+          ).__HARNESS__.setNextScenario(scenario),
+        "engine-cancel-hold",
+      );
+      await page
+        .getByRole("button", { name: t("sync.engineP4.updateButton") })
+        .click();
+      const cancelButton = page.getByRole("button", { name: t("sync.engineP4.cancel") });
+      await expect(cancelButton).toBeVisible();
+      await cancelButton.click();
+      await expect(
+        page.getByRole("button", { name: t("sync.cancelling") }),
+      ).toBeDisabled();
+      await assertCleanAndInBounds(page, fid("engine-cancel-pending-dark-1056"));
     });
 
     // long-workspace-names at 352 (workspaces=long).
