@@ -19,7 +19,14 @@ export type ScenarioId =
   | "git-running-hold"
   | "git-quick-success"
   | "git-error"
-  | "rollback-complete";
+  | "rollback-complete"
+  // Phase 30 (30-05): the P4 engine-update scenarios. Their prologues drive the
+  // PRODUCTION useEngineUpdate hook through the same Channel/runCallback seam.
+  | "engine-running-hold"
+  | "engine-quick-success"
+  | "engine-error"
+  | "engine-partial"
+  | "engine-cancel-hold";
 
 /** Which start command opened the channel being scripted. */
 export type StartKind = "sync" | "rollback" | "git" | "engine";
@@ -78,6 +85,8 @@ function defaultScenarioFor(kind: StartKind): ScenarioId {
       return "git-quick-success";
     case "rollback":
       return "rollback-complete";
+    case "engine":
+      return "engine-quick-success";
     default:
       return "quick-complete";
   }
@@ -123,6 +132,31 @@ const BUILTIN_SCRIPTS: Record<ScenarioId, ScenarioScript> = {
   "rollback-complete": {
     prologue: [],
     terminal: { event: "syncCompleted", data: { changelist: "381204", filesSynced: 40, warnings: [] } },
+  },
+  // Phase 30 (30-05): engine built-ins. The canonical engine prologue
+  // (count → sync → progress → log batches) is registered over these in
+  // events.ts CANONICAL_SCRIPTS; these minimal forms keep the controller
+  // self-sufficient. `engine-cancel-hold` defers its terminal exactly like
+  // `cancel-hold` so the in-place cancel-pending handshake can be scripted.
+  "engine-running-hold": {
+    prologue: [{ event: "stepStarted", data: { step: "engineUpdate", description: "fixture engine update", subStep: "sync" } }],
+  },
+  "engine-quick-success": {
+    prologue: [{ event: "stepStarted", data: { step: "engineUpdate", description: "fixture engine update", subStep: "sync" } }],
+    terminal: { event: "syncCompleted", data: { changelist: "381234", filesSynced: 8, warnings: [] } },
+  },
+  "engine-error": {
+    prologue: [],
+    terminal: { event: "syncFailed", data: { step: "engineUpdate", error: "fixture: p4 sync failed" } },
+  },
+  "engine-partial": {
+    prologue: [{ event: "stepStarted", data: { step: "engineUpdate", description: "fixture engine update", subStep: "sync" } }],
+    terminal: { event: "syncCompleted", data: { changelist: "381234", filesSynced: 8, warnings: [] } },
+  },
+  "engine-cancel-hold": {
+    prologue: [{ event: "stepStarted", data: { step: "engineUpdate", description: "fixture engine update", subStep: "sync" } }],
+    terminal: { event: "syncCancelled", data: { step: "engineUpdate" } },
+    deferCancel: true,
   },
 };
 

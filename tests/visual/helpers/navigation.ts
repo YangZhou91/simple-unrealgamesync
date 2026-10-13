@@ -43,7 +43,10 @@ function dictFor(locale: HarnessLocale) {
   return locale === "en" ? tEn : tZh;
 }
 
-/** The 9 matrix surfaces (CONTRACT-02: 9 surfaces x 2 themes x 4 widths = 72). */
+/**
+ * The 10 matrix surfaces (Phase 30 30-05: `engine-running` added) —
+ * 10 surfaces x 2 themes x 4 widths = 80 per locale.
+ */
 export type MatrixView =
   | "idle"
   | "running"
@@ -51,9 +54,17 @@ export type MatrixView =
   | "error"
   | "git-running"
   | "git-error"
+  | "engine-running"
   | "history"
   | "health"
   | "settings";
+
+/**
+ * Phase 30 (30-05): the focused engine terminal states. These are NOT matrix
+ * views (the matrix oracle stays at ten); they are driven directly by the
+ * focused geometry/interaction rows through `setEngineFocusedView`.
+ */
+export type EngineFocusedView = "engine-success" | "engine-error" | "engine-partial";
 
 /** Harness URL params — locale + workspaces seeding (23-01 entry contract). */
 export interface HarnessOptions {
@@ -207,18 +218,20 @@ async function setNextScenario(page: Page, id: string): Promise<void> {
 }
 
 /**
- * Drive one of the 9 matrix surfaces via REAL UI actions onto hook-level
+ * Drive one of the 10 matrix surfaces via REAL UI actions onto hook-level
  * states (never a parallel render branch):
- *   idle        — ensured: no operation running, CL field empty
- *   running     — Start with the "running-hold" scenario (held running state)
- *   completed   — Start with "quick-complete" (terminal syncCompleted → idle
- *                 + lastSyncResult = the canonical "completed" projection)
- *   error       — Start with "network-error" (syncState error + errorInfo)
- *   git-running — Git Pull with "git-running-hold" (gitState running)
- *   git-error   — Git Pull with "git-error" (gitState error)
- *   history     — switchTab history
- *   health      — switchTab health (pre-Audit empty state)
- *   settings    — open the Settings dialog (Radix portal)
+ *   idle            — ensured: no operation running, CL field empty
+ *   running         — Start with the "running-hold" scenario (held running state)
+ *   completed       — Start with "quick-complete" (terminal syncCompleted → idle
+ *                     + lastSyncResult = the canonical "completed" projection)
+ *   error           — Start with "network-error" (syncState error + errorInfo)
+ *   git-running     — Git Pull with "git-running-hold" (gitState running)
+ *   git-error       — Git Pull with "git-error" (gitState error)
+ *   engine-running  — P4 Update UnrealEngine with "engine-running-hold"
+ *                     (engineState running — the production useEngineUpdate hook)
+ *   history         — switchTab history
+ *   health          — switchTab health (pre-Audit empty state)
+ *   settings        — open the Settings dialog (Radix portal)
  */
 export async function setView(
   page: Page,
@@ -298,6 +311,21 @@ export async function setView(
       ).toBeVisible();
       return;
     }
+    case "engine-running": {
+      // Phase 30 (30-05): the engine running surface, reached by a REAL click
+      // on the idle engine card's button through the production
+      // useEngineUpdate hook. The held scenario keeps engineState "running",
+      // so the panel's single Cancel Update is present.
+      await switchTab(page, "sync", locale);
+      await setNextScenario(page, "engine-running-hold");
+      await page
+        .getByRole("button", { name: t("sync.engineP4.updateButton") })
+        .click();
+      await expect(
+        page.getByRole("button", { name: t("sync.engineP4.cancel") }),
+      ).toBeVisible();
+      return;
+    }
     case "history": {
       await switchTab(page, "history", locale);
       // First history row is visible — the table rendered.
@@ -313,6 +341,49 @@ export async function setView(
     }
     case "settings": {
       await openSettingsDialog(page, locale);
+      return;
+    }
+  }
+}
+
+/**
+ * Phase 30 (30-05): the focused engine terminal states — driven directly by
+ * the focused geometry/interaction rows, NOT part of the ten-view matrix
+ * oracle. Each state is reached by a REAL click on the idle engine card's
+ * button under a pre-selected canonical scenario, then awaited on that
+ * state's own typed, locale-resolved chrome.
+ */
+export async function setEngineFocusedView(
+  page: Page,
+  view: EngineFocusedView,
+  locale: HarnessLocale = "zh",
+): Promise<void> {
+  const t = dictFor(locale);
+  await switchTab(page, "sync", locale);
+  const updateButton = page.getByRole("button", {
+    name: t("sync.engineP4.updateButton"),
+  });
+  switch (view) {
+    case "engine-success": {
+      await setNextScenario(page, "engine-quick-success");
+      await updateButton.click();
+      await expect(page.getByText(t("sync.engineP4.success"))).toBeVisible();
+      return;
+    }
+    case "engine-error": {
+      await setNextScenario(page, "engine-error");
+      await updateButton.click();
+      await expect(page.getByText(t("sync.engineP4.failed"))).toBeVisible();
+      return;
+    }
+    case "engine-partial": {
+      await setNextScenario(page, "engine-partial");
+      await updateButton.click();
+      // D-03/D-11: the ordered pair must not collapse — BOTH regions render
+      // simultaneously (the engine's real success beside the genProject
+      // failure), never a plain error card.
+      await expect(page.getByText(t("sync.engineP4.success"))).toBeVisible();
+      await expect(page.getByText(t("sync.engineP4.partial"))).toBeVisible();
       return;
     }
   }

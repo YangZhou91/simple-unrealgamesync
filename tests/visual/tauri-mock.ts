@@ -23,6 +23,10 @@ import {
 /** Matches the mocked app version surfaced in the sidebar changelog button. */
 const FIXTURE_APP_VERSION = "1.7.0";
 const FIXTURE_LOG_PATH = "D:\\Fixtures\\logs\\sugs.log";
+// Phase 30 (30-05, D-10): the engine subtree's own have-CL, surfaced by the
+// idle engine card's status row. A fixed fixture literal — deterministic
+// captures; never the project's Current CL.
+const FIXTURE_ENGINE_CL = "381234";
 
 // Phase 24 (24-02, SHELL-02): titlebar adapter call log. Records the exact
 // IPC command names the AppTitleBar buttons invoke, in click order, so specs
@@ -88,6 +92,10 @@ export function createHarness(): void {
         return FIXTURE_STREAM;
       case "git_status":
         return FIXTURE_GIT_BRANCH;
+      // Phase 30 (30-05, D-10): the engine have-CL query. Fixed fixture literal
+      // so the idle engine card's status row is deterministic.
+      case "engine_status":
+        return FIXTURE_ENGINE_CL;
       case "get_history":
         return FIXTURE_HISTORY;
       case "get_changelists":
@@ -120,9 +128,17 @@ export function createHarness(): void {
         if (id == null) throw new Error("fixture: git_pull without onEvent channel");
         return harnessController.beginStart(id, "git");
       }
+      // Phase 30 (30-05): the engine start command — drives the PRODUCTION
+      // useEngineUpdate hook over the same Channel seam as git_pull.
+      case "engine_update": {
+        const id = channelArgId(arg(args));
+        if (id == null) throw new Error("fixture: engine_update without onEvent channel");
+        return harnessController.beginStart(id, "engine");
+      }
       // defers the terminal cancel event until releaseCancel() under cancel-hold
       case "stop_sync":
       case "stop_git_pull":
+      case "stop_engine_update":
         return harnessController.stopStart();
       case "add_workspace":
         return FIXTURE_ADDED_WORKSPACE;
