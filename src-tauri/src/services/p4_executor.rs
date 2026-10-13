@@ -1452,6 +1452,311 @@ impl P4Executor {
         }
     }
 
+    /// The real P4 engine sync (`p4 sync [--parallel=threads=N] UnrealEngine/Engine/...`).
+    ///
+    /// Streams count-driven `Progress` + `LogBatch` from one spawn, cancels
+    /// through the process manager, and returns `(files_synced, merged_warnings)`.
+    ///
+    /// Modelled on `force_sync_engine`'s drain/select! shape **plus** the
+    /// per-matched-line progress accounting from `sync()`. Two deliberate
+    /// divergences from `force_sync_engine`:
+    /// - **`-I` is kept** (follow `sync()`, not `force_sync_engine`): D-06 makes
+    ///   the engine builder pass `--parallel`, and dropping `-I` silently
+    ///   disables `--parallel`.
+    /// - **Progress is emitted** at the ~200 ms throttle. All byte fields and
+    ///   `percent` are `None` — the engine bar is count-driven (30-UI-SPEC §8.3);
+    ///   the byte bar is FORC-27/28/29, out of scope.
+    ///
+    /// `total` is the caller-supplied `-n` count. A `total` of 0 (the count
+    /// failed or the workspace is already current) is a legitimate input and
+    /// emits `Progress { total: 0, .. }` — never a fabricated denominator, never
+    /// a divide-by-zero. No heartbeat task, no `DiskUsageSampler`, no per-run
+    /// file writer (the engine update emits no byte signal); `clear_tracked()`
+    /// is the caller's responsibility (matches the `force_sync_engine` precedent).
+    pub async fn engine_sync(
+        &self,
+        workspace: &WorkspaceConfig,
+        channel: &CountingChannel,
+        cancel: CancellationToken,
+        parallel_threads: u32,
+        total: u64,
+        process_manager: Option<Arc<ProcessManager>>,
+    ) -> Result<(u64, Vec<WarningEntry>), AppError> {
+        let args = build_engine_sync_args(parallel_threads);
+        let args_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+
+        // Keep `-I` (follow `sync()`): the engine builder can pass `--parallel`,
+        // and `--parallel` is silently disabled without `-I`.
+        let mut cmd = Command::new("p4");
+        command_no_window(&mut cmd);
+        cmd.arg("-I");
+        cmd.args(p4_global_args(workspace));
+        cmd.args(&args_refs);
+
+        let mut child = spawn_with_retry(
+            cmd.stdin(Stdio::null())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped()),
+        )
+        .await
+        .map_err(AppError::ProcessSpawn)?;
+
+        // Track the p4 child PID ONCE here (before stdout/stderr take) so
+        // stop_all can kill it and so the lifecycle log lines reuse the same id.
+        let spawn_start = std::time::Instant::now();
+        let child_pid: Option<u32> = child.id();
+        if let (Some(ref pm), Some(id)) = (&process_manager, child_pid) {
+            pm.track_pid(id).await;
+        }
+
+        // INSTR-09 / D-09: process.spawned at the track_pid site. args_refs is
+        // the engine sync subcommand args; render_spawned_line re-adds the masked
+        // globals and routes the line through the redact safeguard — never an
+        // ad-hoc info!.
+        info!(
+            "{}",
+            render_spawned_line(
+                child_pid.unwrap_or(0),
+                &workspace.root_path,
+                &args_refs.join(" ")
+            )
+        );
+
+        let stdout = child.stdout.take().unwrap();
+        let stderr = child.stderr.take().unwrap();
+
+        let stdout_reader = BufReader::new(stdout);
+        let stderr_reader = BufReader::new(stderr);
+        let file_count = Arc::new(AtomicU64::new(0));
+        let last_progress_sent = Arc::new(std::sync::Mutex::new(std::time::Instant::now()));
+
+        let ch = channel.clone();
+        let fc = file_count.clone();
+        let lps = last_progress_sent.clone();
+        // Phase 12 / D-02: capture RUN_ID ONCE before spawn (task_local does not
+        // cross tokio::spawn); re-scoped via scope_run_with so every line logs
+        // with [run=<id>].
+        let run_id = RUN_ID.try_with(|r| r.clone()).ok();
+        // Phase 13 WARN-15: one WarningCollector per drain — single-owner capture
+        // (no Arc/Mutex on the hot loop — Pitfall 4).
+        let mut stdout_collector = WarningCollector::new();
+        let stdout_task = tokio::spawn(async move {
+            // Phase 12 / D-09: catch_unwind_future wrap (async-aware twin of
+            // std::catch_unwind), collector.ingest() INSIDE the wrap (WARN-17).
+            let result: Result<Vec<WarningEntry>, Box<dyn std::any::Any + Send>> =
+                crate::utils::log::catch_unwind_future(async move {
+                    scope_run_with(run_id, async move {
+                        let mut lines = stdout_reader.lines();
+                        let mut log_buf: Vec<String> = Vec::with_capacity(500);
+                        let mut last_log_flush = std::time::Instant::now();
+                        while let Ok(Some(line)) = lines.next_line().await {
+                            // Phase 13 WARN-15: ingest EVERY line first.
+                            stdout_collector.ingest(&line, DrainOrigin::Stdout);
+                            // Count-driven current-file accounting (mirrors sync()).
+                            let current = if parse_sync_file_count(&line) > 0 {
+                                fc.fetch_add(1, Ordering::Relaxed) + 1
+                            } else {
+                                fc.load(Ordering::Relaxed)
+                            };
+                            let current_file = extract_sync_file_path(&line);
+                            log_buf.push(line);
+                            // Flush log batch at 500 lines or 200ms.
+                            let should_flush_log = log_buf.len() >= 500
+                                || last_log_flush.elapsed() >= std::time::Duration::from_millis(200);
+                            if should_flush_log {
+                                let batch_len = log_buf.len();
+                                let flush_start = last_log_flush;
+                                let current_files = fc.load(Ordering::Relaxed);
+                                let batch = std::mem::take(&mut log_buf);
+                                let _ = ch.send(SyncEvent::LogBatch {
+                                    lines: batch,
+                                    stream: "stdout".to_string(),
+                                });
+                                last_log_flush = std::time::Instant::now();
+                                if log::log_enabled!(log::Level::Debug) {
+                                    crate::utils::log::debug!(
+                                        "stdout drained stream=stdout lines={} elapsed={}ms current={} total={}",
+                                        batch_len,
+                                        flush_start.elapsed().as_millis(),
+                                        current_files,
+                                        total
+                                    );
+                                }
+                            }
+                            // Throttle Progress to ~200ms (mirrors sync()).
+                            let should_send = {
+                                let mut guard = lps.lock().unwrap();
+                                if guard.elapsed() >= std::time::Duration::from_millis(200) {
+                                    *guard = std::time::Instant::now();
+                                    true
+                                } else {
+                                    false
+                                }
+                            };
+                            if should_send {
+                                // Count-driven only: byte fields + percent are
+                                // None (the engine bar is count-driven; the byte
+                                // bar is FORC-27/28/29, out of scope).
+                                let _ = ch.send(SyncEvent::Progress {
+                                    current,
+                                    total,
+                                    current_file,
+                                    bytes_done: None,
+                                    bytes_total: None,
+                                    bytes_rate: None,
+                                    percent: None,
+                                    phase: None,
+                                });
+                            }
+                        }
+                        // Flush any remaining lines not yet sent.
+                        if !log_buf.is_empty() {
+                            let batch_len = log_buf.len();
+                            let flush_start = last_log_flush;
+                            let current_files = fc.load(Ordering::Relaxed);
+                            let _ = ch.send(SyncEvent::LogBatch {
+                                lines: log_buf,
+                                stream: "stdout".to_string(),
+                            });
+                            if log::log_enabled!(log::Level::Debug) {
+                                crate::utils::log::debug!(
+                                    "stdout drained stream=stdout lines={} elapsed={}ms current={} total={}",
+                                    batch_len,
+                                    flush_start.elapsed().as_millis(),
+                                    current_files,
+                                    total
+                                );
+                            }
+                        }
+                        // D-05 (Phase 12 / HOTUI-12): per-completion counter summary.
+                        if log::log_enabled!(log::Level::Debug) {
+                            crate::utils::log::debug!(
+                                "ipc.channel drain complete stream=stdout sent_total={}",
+                                ch.count()
+                            );
+                        }
+                        stdout_collector.finalize()
+                    })
+                    .await
+                })
+                .await;
+            match result {
+                Ok(warnings) => warnings,
+                Err(payload) => {
+                    let msg = crate::utils::log::panic_payload_as_str(&payload);
+                    warn!("[drain] panic caught stream=stdout msg={}", msg);
+                    Vec::new()
+                }
+            }
+        });
+
+        let ch_err = channel.clone();
+        let run_id = RUN_ID.try_with(|r| r.clone()).ok();
+        let mut stderr_collector = WarningCollector::new();
+        let stderr_task = tokio::spawn(async move {
+            let result: Result<Vec<WarningEntry>, Box<dyn std::any::Any + Send>> =
+                crate::utils::log::catch_unwind_future(async move {
+                    scope_run_with(run_id, async move {
+                        let mut lines = stderr_reader.lines();
+                        let mut log_buf: Vec<String> = Vec::with_capacity(64);
+                        let mut last_log_flush = std::time::Instant::now();
+                        while let Ok(Some(line)) = lines.next_line().await {
+                            // Phase 13 WARN-16: stderr forces Error severity.
+                            stderr_collector.ingest(&line, DrainOrigin::Stderr);
+                            log_buf.push(line);
+                            let should_flush_log = log_buf.len() >= 500
+                                || last_log_flush.elapsed() >= std::time::Duration::from_millis(200);
+                            if should_flush_log {
+                                let batch_len = log_buf.len();
+                                let flush_start = last_log_flush;
+                                let batch = std::mem::take(&mut log_buf);
+                                let _ = ch_err.send(SyncEvent::LogBatch {
+                                    lines: batch,
+                                    stream: "stderr".to_string(),
+                                });
+                                last_log_flush = std::time::Instant::now();
+                                if log::log_enabled!(log::Level::Debug) {
+                                    crate::utils::log::debug!(
+                                        "stderr drained stream=stderr lines={} elapsed={}ms",
+                                        batch_len,
+                                        flush_start.elapsed().as_millis()
+                                    );
+                                }
+                            }
+                        }
+                        if !log_buf.is_empty() {
+                            let batch_len = log_buf.len();
+                            let flush_start = last_log_flush;
+                            let _ = ch_err.send(SyncEvent::LogBatch {
+                                lines: log_buf,
+                                stream: "stderr".to_string(),
+                            });
+                            if log::log_enabled!(log::Level::Debug) {
+                                crate::utils::log::debug!(
+                                    "stderr drained stream=stderr lines={} elapsed={}ms",
+                                    batch_len,
+                                    flush_start.elapsed().as_millis()
+                                );
+                            }
+                        }
+                        if log::log_enabled!(log::Level::Debug) {
+                            crate::utils::log::debug!(
+                                "ipc.channel drain complete stream=stderr sent_total={}",
+                                ch_err.count()
+                            );
+                        }
+                        stderr_collector.finalize()
+                    })
+                    .await
+                })
+                .await;
+            match result {
+                Ok(warnings) => warnings,
+                Err(payload) => {
+                    let msg = crate::utils::log::panic_payload_as_str(&payload);
+                    warn!("[drain] panic caught stream=stderr msg={}", msg);
+                    Vec::new()
+                }
+            }
+        });
+
+        // Cancellation support: no heartbeat task (the engine update emits no
+        // byte signal). Caller (EngineService::update) owns clear_tracked().
+        tokio::select! {
+            status = child.wait() => {
+                let stdout_warnings = stdout_task.await.unwrap_or_default();
+                let stderr_warnings = stderr_task.await.unwrap_or_default();
+                let status = status.map_err(AppError::ProcessSpawn)?;
+                let pid_for_log = child_pid.unwrap_or(0);
+                let elapsed_for_log = spawn_start.elapsed().as_millis();
+                info!(
+                    "{}",
+                    render_exited_line(pid_for_log, status.code(), elapsed_for_log)
+                );
+                if !status.success() {
+                    return Err(AppError::P4Command(status.code()));
+                }
+                Ok((
+                    file_count.load(Ordering::Relaxed),
+                    merge_warning_lists([stdout_warnings, stderr_warnings]),
+                ))
+            }
+            _ = cancel.cancelled() => {
+                let _ = child.kill().await;
+                // Drop warnings on cancel — await only to release JoinHandles.
+                let _ = stdout_task.await;
+                let _ = stderr_task.await;
+                let pid_for_log = child_pid.unwrap_or(0);
+                let elapsed_for_log = spawn_start.elapsed().as_millis();
+                info!(
+                    "{}",
+                    render_cancelled_line(pid_for_log, elapsed_for_log)
+                );
+                Err(AppError::Cancelled)
+            }
+        }
+    }
+
     pub async fn dry_run_sync(
         &self,
         workspace: &WorkspaceConfig,
