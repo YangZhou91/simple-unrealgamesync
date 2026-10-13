@@ -53,7 +53,7 @@ pub fn run() {
         operation_lock.clone(),
     ));
     let p4_executor = Arc::new(P4Executor::new());
-    let git_service = Arc::new(GitService::new(process_manager.clone()));
+    let git_service = Arc::new(GitService::new(process_manager.clone(), operation_lock.clone()));
 
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())

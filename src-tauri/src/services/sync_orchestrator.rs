@@ -8,7 +8,7 @@ use crate::services::workspace::WorkspaceService;
 use crate::utils::counting_channel::CountingChannel;
 use crate::utils::log::StepScope;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_log::log::{error, info, warn};
@@ -39,7 +39,6 @@ struct SyncStatePayload {
 pub struct SyncOrchestrator {
     p4: P4Executor,
     process_manager: Arc<ProcessManager>,
-    pipeline_running: AtomicBool,
     lock: Arc<OperationLock>,
 }
 
@@ -48,13 +47,8 @@ impl SyncOrchestrator {
         Self {
             p4: P4Executor::new(),
             process_manager,
-            pipeline_running: AtomicBool::new(false),
             lock,
         }
-    }
-
-    pub fn is_pipeline_running(&self) -> bool {
-        self.pipeline_running.load(Ordering::SeqCst)
     }
 
     pub async fn run_pipeline(
@@ -366,17 +360,10 @@ impl SyncOrchestrator {
         channel: CountingChannel,
         app: AppHandle,
     ) -> Result<(), AppError> {
-        if self.pipeline_running.swap(true, Ordering::SeqCst) {
-            return Err(AppError::Process(
-                "A sync pipeline is already running".into(),
-            ));
-        }
+        let _guard = self.lock.acquire(Operation::Sync)?;
 
-        let result = self
-            .rollback_pipeline_inner(workspace_id, target_cl, channel, app)
-            .await;
-        self.pipeline_running.store(false, Ordering::SeqCst);
-        result
+        self.rollback_pipeline_inner(workspace_id, target_cl, channel, app)
+            .await
     }
 
     async fn rollback_pipeline_inner(
@@ -625,17 +612,10 @@ impl SyncOrchestrator {
         channel: CountingChannel,
         app: AppHandle,
     ) -> Result<(), AppError> {
-        if self.pipeline_running.swap(true, Ordering::SeqCst) {
-            return Err(AppError::Process(
-                "A sync pipeline is already running".into(),
-            ));
-        }
+        let _guard = self.lock.acquire(Operation::Sync)?;
 
-        let result = self
-            .retry_step_inner(workspace_id, step, target_cl, include_engine, channel, app)
-            .await;
-        self.pipeline_running.store(false, Ordering::SeqCst);
-        result
+        self.retry_step_inner(workspace_id, step, target_cl, include_engine, channel, app)
+            .await
     }
 
     async fn retry_step_inner(

@@ -1,10 +1,10 @@
 use crate::error::AppError;
 use crate::models::{SyncEvent, WorkspaceConfig};
+use crate::services::operation_lock::{Operation, OperationLock};
 use crate::services::process_manager::ProcessManager;
 use crate::utils::counting_channel::CountingChannel;
 use serde::Serialize;
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tauri_plugin_log::log::{error, info, warn};
 use crate::utils::log::{render_cancelled_line, render_exited_line, scope_run_with, RUN_ID};
@@ -59,14 +59,14 @@ impl std::fmt::Debug for GitStatusInfo {
 
 pub struct GitService {
     process_manager: Arc<ProcessManager>,
-    git_running: AtomicBool,
+    lock: Arc<OperationLock>,
 }
 
 impl GitService {
-    pub fn new(process_manager: Arc<ProcessManager>) -> Self {
+    pub fn new(process_manager: Arc<ProcessManager>, lock: Arc<OperationLock>) -> Self {
         Self {
             process_manager,
-            git_running: AtomicBool::new(false),
+            lock,
         }
     }
 
@@ -75,12 +75,11 @@ impl GitService {
         workspace: &WorkspaceConfig,
         channel: &CountingChannel,
     ) -> Result<(), AppError> {
-        if self.git_running.swap(true, Ordering::SeqCst) {
-            return Err(AppError::Process("A git pull is already running".into()));
-        }
-        let result = self.pull_inner(workspace, channel).await;
-        self.git_running.store(false, Ordering::SeqCst);
-        result
+        // D-13: enter through the shared lock — a pull is refused while a sync
+        // or an engine update is in flight, and vice versa. The guard lives
+        // across `pull_inner` and releases via `Drop` on every return path.
+        let _guard = self.lock.acquire(Operation::GitPull)?;
+        self.pull_inner(workspace, channel).await
     }
 
     async fn pull_inner(
