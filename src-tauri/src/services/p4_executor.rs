@@ -624,6 +624,37 @@ impl P4Executor {
         Ok(parse_have_changelist(&stdout))
     }
 
+    /// The engine subtree's own have-changelist (D-10): the analogue of
+    /// `get_have_changelist` scoped to `UnrealEngine/Engine/...`, so the engine
+    /// card's status line shows the engine's CL (never the project's FYGame CL,
+    /// which would be actively misleading).
+    ///
+    /// `get_have_changelist` is deliberately NOT widened with a path parameter —
+    /// it is a tested public method reached from another command. This sibling
+    /// copies its structure with a single change: the `//<client>/...` path form
+    /// (a bare `//...` is mis-resolved under `-d` on Windows) plus the engine
+    /// subtree. `parse_have_changelist` is reused unchanged, and `Ok(None)` on a
+    /// non-success p4 status keeps a p4 failure non-fatal.
+    pub async fn engine_have_changelist(
+        &self,
+        workspace: &WorkspaceConfig,
+    ) -> Result<Option<String>, AppError> {
+        // Use //client_name/... instead of //... because the -d flag on Windows
+        // causes //... to be resolved as a local path.
+        let client_path = format!("//{}/UnrealEngine/Engine/...#have", workspace.p4_client);
+        let mut cmd = self.build_p4_command(workspace, &["changes", "-m1", &client_path]);
+        let output = output_with_retry(&mut cmd)
+            .await
+            .map_err(AppError::ProcessSpawn)?;
+
+        if !output.status.success() {
+            return Ok(None);
+        }
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        Ok(parse_have_changelist(&stdout))
+    }
+
     /// Read the bound p4 stream of the workspace's client spec via `p4 client -o`.
     /// Returns `Ok(Some(stream))` when the client has a non-empty `Stream:`
     /// field (stream-bound client), or `Ok(None)` when the client is classic
@@ -4084,6 +4115,39 @@ exit: 0
             parse_have_changelist("error: //client/...#have - no such file(s).\nexit: 1"),
             None
         );
+    }
+
+    // --- Tests for the engine-scoped have-CL (Phase 30 / D-10) ---
+
+    #[test]
+    fn test_engine_have_changelist_parse_shape() {
+        // The engine query reuses `parse_have_changelist` unchanged, so the
+        // engine-shaped `p4 changes -m1` output parses identically: an
+        // `info:`-tagged `Change <N>` line yields Some(N); an `error:`-tagged
+        // or empty input yields None (a p4 failure is non-fatal).
+        assert_eq!(
+            parse_have_changelist(
+                "info: Change 381234 on 2026/10/13 by user@client 'desc'\nexit: 0"
+            ),
+            Some("381234".to_string())
+        );
+        assert_eq!(
+            parse_have_changelist("error: //client/UnrealEngine/Engine/...#have - no such file(s).\nexit: 1"),
+            None
+        );
+        assert_eq!(parse_have_changelist(""), None);
+    }
+
+    #[test]
+    fn test_engine_have_changelist_error_taxonomy_display() {
+        // ENGU-05: the engine failure surface is the existing AppError taxonomy.
+        // AppError serializes as its Display string (error.rs), so these are the
+        // exact strings the frontend receives on SyncFailed.error.
+        assert_eq!(
+            AppError::P4Command(Some(1)).to_string(),
+            "P4 command failed with exit code: Some(1)"
+        );
+        assert_eq!(AppError::Cancelled.to_string(), "Operation cancelled");
     }
 
     #[test]
