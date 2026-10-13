@@ -35,6 +35,7 @@ import { test, expect, type Page } from "@playwright/test";
 import {
   gotoHarness,
   openSettingsAppTab,
+  setEngineFocusedView,
   setTheme,
   setViewportSize,
   setView,
@@ -125,6 +126,39 @@ test.describe("canonical captures (dark 1056)", () => {
     await setView(page, "git-running");
     await settleFrame(page);
     await expect(page).toHaveScreenshot("git-running.png");
+  });
+
+  test("capture: engine-running", async ({ page }) => {
+    await setTheme(page, "dark");
+    await setViewportSize(page, 1056);
+    await gotoHarness(page);
+    // engine-running-hold: the count-driven progress (fixed 3/12 literals) and
+    // the two canonical engine log bursts from CANONICAL_SCRIPTS. No byte
+    // progress exists on this surface, so the bar is count-driven — the
+    // deferred FORC-27/28/29 byte bar can never appear here. The running panel
+    // renders no last-sync <time>, so no mask is required (kept off).
+    await setView(page, "engine-running");
+    // The held invoke never resolves, so the engine hook's 200 ms flush (not
+    // the stopFlushTimer finally) is what surfaces the log. Await the flushed
+    // line so the capture cannot race the flush (this pins the post-flush
+    // frame; the alternative — capturing pre-flush — would diff whenever the
+    // capture path exceeds 200 ms under load).
+    await expect(page.getByText("Core.Build.cs#7 - added as")).toBeVisible();
+    await settleFrame(page);
+    await expect(page).toHaveScreenshot("engine-running.png");
+  });
+
+  test("capture: engine-partial", async ({ page }) => {
+    await setTheme(page, "dark");
+    await setViewportSize(page, 1056);
+    await gotoHarness(page);
+    // The D-11 dual-role card: the engine's real success and the genProject
+    // failure render together (deterministic "GenerateProjectFiles.bat not
+    // found" literal). Drives the same focused state the geometry matrix
+    // measures. No last-sync <time> here either — no mask.
+    await setEngineFocusedView(page, "engine-partial");
+    await settleFrame(page);
+    await expect(page).toHaveScreenshot("engine-partial.png");
   });
 
   test("capture: history", async ({ page }) => {

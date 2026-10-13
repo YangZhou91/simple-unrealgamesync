@@ -49,11 +49,19 @@
   },
   {
     "path": "tests/visual/baselines/add.png",
-    "sha256": "0831a1d3a1c5376897e172d9dc52f35158999da2b9f3382c9e03b6d56adb2a9e"
+    "sha256": "482cec594f7ac50cc29df1b073b9dd798d28a27d11268791a46ba3c5eefd5d2c"
   },
   {
     "path": "tests/visual/baselines/app-settings.png",
-    "sha256": "8b09c64bd9ec6664c311d0aecfb61178e94990b53057f6e3aa465e24636bc474"
+    "sha256": "64c39b9d64fc2a9127772aba116e387920114f57f80f9be61c31035b46f40715"
+  },
+  {
+    "path": "tests/visual/baselines/engine-partial.png",
+    "sha256": "d6ba5590b16a35ae6ed07f1748591397df5f1e337f82d4977b3ff76f5e5ffa6c"
+  },
+  {
+    "path": "tests/visual/baselines/engine-running.png",
+    "sha256": "e7c215cec0ad676473c5a8e92a2778bf8abc44fceb6c656de35582d02b6a1df0"
   },
   {
     "path": "tests/visual/baselines/git-running.png",
@@ -69,15 +77,15 @@
   },
   {
     "path": "tests/visual/baselines/idle.png",
-    "sha256": "fca1eb8605249fd1cdd0fbb61c65d4485a569c0806f6840d9936bf6680217652"
+    "sha256": "d3181e990622374e80c427be03eb19006a393515bbeb394a1bb8a356991ac4e7"
   },
   {
     "path": "tests/visual/baselines/light.png",
-    "sha256": "8f58af9113dffd46e6ea00390abd65d8ac6beba23988fbb568bb0075f0ab06e6"
+    "sha256": "2e5376e5ced6544f562b7f285a2f531704a461cb85b09732abbc90c153117f7a"
   },
   {
     "path": "tests/visual/baselines/narrow.png",
-    "sha256": "ac37d30215eed63168a519c336cd070f2b689773ed0e1b53edd238bdf169dca5"
+    "sha256": "ba9dfb71ccd6a3cc0dadf5ead2a9cfff07aec453dee48f9927cd29b237765a58"
   },
   {
     "path": "tests/visual/baselines/rollback.png",
@@ -89,11 +97,11 @@
   },
   {
     "path": "tests/visual/baselines/settings.png",
-    "sha256": "ebfde78ed6200c780ae151ef6a1f694cb7e85449e14d5e3dcf289fca37c8d723"
+    "sha256": "b8e03f40ff9157e83f25cc9efa4b42611aa8b1a0d1240735c61216e6885fe041"
   },
   {
     "path": "tests/visual/baselines/target.png",
-    "sha256": "168c86cd8b69972934114a47a7de84a653470ede342a932b6b46c07800ff9e90"
+    "sha256": "82dbf2d5367c9493a9aa2c5d9b59f8db89e477e1d56f5bbcd0559553b2f488c7"
   },
   {
     "path": "tests/visual/canonical/ugs-code-add.png",
