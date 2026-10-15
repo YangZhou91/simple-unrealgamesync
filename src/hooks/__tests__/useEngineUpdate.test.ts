@@ -150,6 +150,67 @@ describe("useEngineUpdate reducer", () => {
     expect(result.current.errorInfo).toBeNull();
   });
 
+  // Test 3c (30-06 / CR-01, gap 2, D-11, ENGU-05/06) — the partial wire race:
+  // under the production wire contract (FatalMissingBat and genProject
+  // non-zero exit both emit the SyncCompleted -> SyncFailed{genProject}
+  // ordered pair and THEN fail the invoke), the pair resolves the run to
+  // "partial" and the later rejection must not replace the event-derived
+  // values with its stringified payload.
+  it("partial rejection: an engineUpdate rejection after the syncCompleted -> syncFailed{genProject} pair leaves the partial state (CR-01, D-11)", async () => {
+    const d = deferred<void>();
+    (commands.engineUpdate as unknown as { mockReturnValueOnce: (v: unknown) => void })
+      .mockReturnValueOnce(d.promise);
+
+    const { result } = renderHook(() => useEngineUpdate());
+    const channel = startRun(result);
+
+    // The D-03 ordered pair production emits — SyncCompleted carrying the
+    // engine CL, then SyncFailed{step:"genProject"} with no intervening
+    // StepCompleted — in one channel flush.
+    act(() => {
+      channel.onmessage(completedEvent);
+      channel.onmessage(genProjectFailure);
+    });
+    expect(result.current.engineState).toBe("partial");
+
+    // Then the invoke rejects (the backend's Err(CommandFailed{genProject})).
+    await act(async () => {
+      d.reject(new Error('Command failed at step "genProject"'));
+      await d.promise.catch(() => {});
+    });
+
+    // The event-derived values win; the rejection's stringified payload must
+    // not replace them — the dual-region partial card stays reachable.
+    expect(result.current.engineState).toBe("partial");
+    expect(result.current.resultCl).toBe("381234");
+    expect(result.current.errorInfo).toEqual({
+      error: "GenerateProjectFiles.bat not found",
+    });
+  });
+
+  // Test 3d (30-06 / ENGU-05 — the guard's negative space, the D-12/D-13
+  // lock-refusal shape) — a rejection with NO terminal channel event must
+  // still surface the error state carrying the rejection's message. The guard
+  // exists to protect terminal states, never to swallow genuine rejections.
+  it("genuine rejection: an engineUpdate rejection with no terminal event still surfaces the error state", async () => {
+    (commands.engineUpdate as unknown as { mockRejectedValueOnce: (v: unknown) => void })
+      .mockRejectedValueOnce(new Error("A sync pipeline is already running"));
+
+    const { result } = renderHook(() => useEngineUpdate());
+    startRun(result);
+    expect(result.current.engineState).toBe("running");
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(result.current.engineState).toBe("error");
+    expect(result.current.errorInfo?.error).toContain(
+      "A sync pipeline is already running",
+    );
+  });
+
   // Test 4 — a lone syncCompleted is a clean success carrying the CL.
   it("success: syncCompleted alone yields success carrying the CL", () => {
     const { result } = renderHook(() => useEngineUpdate());
