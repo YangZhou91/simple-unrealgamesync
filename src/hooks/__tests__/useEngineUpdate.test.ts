@@ -118,6 +118,38 @@ describe("useEngineUpdate reducer", () => {
     expect(result.current.engineState).toBe("idle");
   });
 
+  // Test 3b (30-06 / CR-01, gap 1, ENGU-04) — the cancel wire race: Tauri
+  // delivers the terminal channel event BEFORE the invoke settles, so the
+  // rejection arrives after syncCancelled. The catch must not overwrite the
+  // channel-derived idle state with the error card. The
+  // deferred-then-reject sequence is load-bearing — it models the production
+  // ordering (channel event delivered before the invoke settles); an
+  // immediately-rejecting mock would race the event feed and prove nothing.
+  it("cancel rejection: an engineUpdate rejection after syncCancelled leaves the cancelled idle state (CR-01)", async () => {
+    const d = deferred<void>();
+    (commands.engineUpdate as unknown as { mockReturnValueOnce: (v: unknown) => void })
+      .mockReturnValueOnce(d.promise);
+
+    const { result } = renderHook(() => useEngineUpdate());
+    const channel = startRun(result);
+    expect(result.current.engineState).toBe("running");
+
+    // The terminal channel event lands first...
+    feed(channel, { event: "syncCancelled", data: { step: "engineUpdate" } });
+    expect(result.current.engineState).toBe("idle");
+
+    // ...then the invoke settles as a rejection (the pre-30-06 backend's
+    // Err(AppError::Cancelled) shape). The channel-derived idle state must
+    // survive it.
+    await act(async () => {
+      d.reject(new Error("Operation cancelled"));
+      await d.promise.catch(() => {});
+    });
+
+    expect(result.current.engineState).toBe("idle");
+    expect(result.current.errorInfo).toBeNull();
+  });
+
   // Test 4 — a lone syncCompleted is a clean success carrying the CL.
   it("success: syncCompleted alone yields success carrying the CL", () => {
     const { result } = renderHook(() => useEngineUpdate());

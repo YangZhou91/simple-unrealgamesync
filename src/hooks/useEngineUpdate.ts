@@ -46,6 +46,16 @@ export function useEngineUpdate() {
   // subsequent `syncFailed` in the same channel flush can see it. A state
   // variable would be stale here — both events can arrive in one flush.
   const completedRef = useRef(false);
+  // CR-01 (30-06): set synchronously by ALL three terminal channel handlers
+  // (`syncCompleted` / `syncFailed` / `syncCancelled`), in the same tick as
+  // their state updates — channel delivery and the invoke settlement are not
+  // in the same React tick, so a state variable would be stale here. Consulted
+  // by `startEngineUpdate`'s catch: an invoke rejection arriving AFTER a
+  // terminal event must not overwrite the channel-derived terminal state (the
+  // wire race where Tauri delivers the terminal event before the promise
+  // settles). Reset per-run, so a later run's genuine rejection is never
+  // masked by an earlier run's terminal event.
+  const terminalSeenRef = useRef(false);
   const engineStateRef = useRef<EngineUpdateState>("idle");
   engineStateRef.current = engineState;
 
@@ -97,11 +107,16 @@ export function useEngineUpdate() {
           // Load-bearing (Pitfall 3): mark completion BEFORE any later
           // syncFailed can be reduced, and keep the engine's real CL.
           completedRef.current = true;
+          // CR-01 (30-06): terminal seen — a later invoke rejection must not
+          // overwrite this channel-derived terminal state.
+          terminalSeenRef.current = true;
           setResultCl(event.data.changelist);
           setEngineState("success");
           setIsCancelling(false);
           break;
         case "syncFailed":
+          // CR-01 (30-06): terminal seen — see the syncCompleted case above.
+          terminalSeenRef.current = true;
           setErrorInfo({ error: event.data.error });
           // The ordered pair (SyncCompleted then SyncFailed{genProject}) is a
           // PARTIAL success, not a plain error. A lone failure stays "error".
@@ -109,6 +124,9 @@ export function useEngineUpdate() {
           setIsCancelling(false);
           break;
         case "syncCancelled":
+          // CR-01 (30-06): terminal seen — the cancel-derived idle state is
+          // final; a subsequent invoke rejection cannot overwrite it.
+          terminalSeenRef.current = true;
           // Dismiss-equivalent, mirroring useGit.ts:72-74.
           setEngineState("idle");
           setIsCancelling(false);
@@ -141,14 +159,31 @@ export function useEngineUpdate() {
       setCurrentStep(null);
       setCurrentSubStep(null);
       completedRef.current = false;
+      // CR-01 (30-06): per-run reset — this run's rejections must be judged
+      // only against this run's terminal events.
+      terminalSeenRef.current = false;
       setIsCancelling(false);
       setEngineState("running");
       startFlushTimer();
       try {
         await commands.engineUpdate(workspaceId, channel);
       } catch (e) {
-        setEngineState("error");
-        setErrorInfo({ error: String(e) });
+        // CR-01 (30-06): a terminal channel event already resolved this run —
+        // the channel delivery beats the invoke settlement, so this rejection
+        // is a stale echo of that terminal outcome (e.g. the backend's
+        // genProject CommandFailed after the ordered pair). Never let it
+        // overwrite the channel-derived terminal state.
+        if (terminalSeenRef.current) {
+          // T-30-19 mitigation: keep the suppressed rejection observable in
+          // diagnostics instead of silently dropping it.
+          console.warn(
+            "[useEngineUpdate] invoke rejected after a terminal channel event — keeping the channel-derived state; suppressed rejection:",
+            e,
+          );
+        } else {
+          setEngineState("error");
+          setErrorInfo({ error: String(e) });
+        }
       } finally {
         // Guarantees no trailing LogBatch is lost when the command resolves
         // (the terminal state is only rendered after the final flush).
@@ -176,6 +211,8 @@ export function useEngineUpdate() {
     setCurrentStep(null);
     setCurrentSubStep(null);
     completedRef.current = false;
+    // CR-01 (30-06): dismiss ends the run — the next run starts unguarded.
+    terminalSeenRef.current = false;
     setIsCancelling(false);
   }, []);
 

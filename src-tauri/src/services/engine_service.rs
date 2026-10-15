@@ -144,7 +144,13 @@ impl EngineService {
                 let _ = channel.send(SyncEvent::SyncCancelled {
                     step: "engineUpdate".to_string(),
                 });
-                return Err(AppError::Cancelled);
+                // CR-01 (30-06): resolve `Ok(())` after the terminal
+                // `SyncCancelled` — mirroring `git_service::pull`
+                // (git_service.rs:381-384), where the cancel-derived terminal
+                // event is the final word and the invoke must not reject after
+                // it. The same applies to the two other cancel arms below; a
+                // user cancel must never surface as an invoke rejection.
+                return Ok(());
             }
             Err(e) => {
                 warn!("[engineUpdate] count pass failed: {e}");
@@ -158,7 +164,7 @@ impl EngineService {
             let _ = channel.send(SyncEvent::SyncCancelled {
                 step: "engineUpdate".to_string(),
             });
-            return Err(AppError::Cancelled);
+            return Ok(());
         }
 
         // Flip the running label from counting to updating.
@@ -188,7 +194,9 @@ impl EngineService {
                 let _ = channel.send(SyncEvent::SyncCancelled {
                     step: "engineUpdate".to_string(),
                 });
-                return Err(AppError::Cancelled);
+                // CR-01 (30-06): see the count-pass cancel arm above — the
+                // terminal `SyncCancelled` is the final word; resolve `Ok(())`.
+                return Ok(());
             }
             Err(e) => {
                 let _ = channel.send(SyncEvent::SyncFailed {
