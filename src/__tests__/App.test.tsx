@@ -551,4 +551,133 @@ describe("App enginePath wiring (Phase 31)", () => {
       held.resolve("git");
     });
   });
+
+  // Gap #2 (31-VERIFICATION must-have truth #5, the Pillar-6 finding): a probe
+  // that REJECTS after a prior resolution must clear the token — otherwise the
+  // Git card survives with an enabled Start Git Pull on a workspace that has no
+  // `.git` at all. The absent identity change is load-bearing: only the catch
+  // can clear the token, so this pins gap #2 in isolation.
+  it("clears a resolved token when a re-probe rejects (gap #2)", async () => {
+    const t = makeT("en");
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    let rejectNext = false;
+    await setInvoke((cmd) =>
+      cmd === "engine_path"
+        ? rejectNext
+          ? Promise.reject(new Error("re-probe failed"))
+          : Promise.resolve("git")
+        : Promise.resolve(),
+    );
+
+    renderWithI18n(<App />);
+    // A resolved to "git" -> the Git card only.
+    await waitFor(() => {
+      expect(
+        screen.queryByRole("button", { name: t("sync.engineP4.updateButton") }),
+      ).toBeNull();
+    });
+    expect(screen.getByRole("button", { name: t("sync.git.pull") })).toBeDefined();
+
+    // Same workspace -> no identity change; only the catch can clear the token.
+    rejectNext = true;
+    const { onSyncComplete } = lastSyncHooks();
+    expect(onSyncComplete).toBeDefined();
+    await act(async () => {
+      onSyncComplete!("99999");
+    });
+
+    await waitFor(() => {
+      expect(
+        screen.getByRole("button", { name: t("sync.engineP4.updateButton") }),
+      ).toBeDefined();
+    });
+    expect(screen.queryByText(t("sync.enginePath.none"))).toBeNull();
+    errSpy.mockRestore();
+  });
+
+  // Pillar 6, switch leg: a stale actionable card must be unreachable when the
+  // workspace switched TO has a failed probe.
+  it("renders the both-cards default when a switched-to workspace's probe rejects (Pillar 6)", async () => {
+    const t = makeT("en");
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    await setInvoke((cmd, args) => {
+      if (cmd !== "engine_path") return Promise.resolve();
+      return argWorkspaceId(args) === WORKSPACE.id
+        ? Promise.resolve("p4")
+        : Promise.reject(new Error("switched-to probe failed"));
+    });
+    h.fixtures.workspaces.list = [WORKSPACE, WORKSPACE_B];
+    h.fixtures.workspaces.selected = WORKSPACE;
+
+    const { rerender } = renderWithI18n(<App />);
+    // A resolved to "p4" -> the P4 card only, Git absent.
+    await waitFor(() => {
+      expect(
+        screen.queryByRole("button", { name: t("sync.git.pull") }),
+      ).toBeNull();
+    });
+    expect(
+      screen.getByRole("button", { name: t("sync.engineP4.updateButton") }),
+    ).toBeDefined();
+
+    h.fixtures.workspaces.selected = WORKSPACE_B;
+    rerender(<App />);
+
+    // The Git button's appearance is the discriminator (A's "p4" hides it).
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: t("sync.git.pull") })).toBeDefined();
+    });
+    expect(
+      screen.getByRole("button", { name: t("sync.engineP4.updateButton") }),
+    ).toBeDefined();
+    expect(screen.queryByText(t("sync.enginePath.none"))).toBeNull();
+    errSpy.mockRestore();
+  });
+
+  // WR-01 (folded): the engine card's have-CL is the sibling derivation and
+  // carried the identical no-reset gap. engine_path is routed to "p4" for BOTH
+  // workspaces so the P4 engine card (the only place engineCl renders) is
+  // genuinely present on both sides — otherwise the absence assertion would be
+  // vacuous.
+  it("does not carry the previous workspace's engine CL across a switch (WR-01)", async () => {
+    const t = makeT("en");
+    const bStatus = deferred<string | null>();
+    await setInvoke((cmd, args) => {
+      const id = argWorkspaceId(args);
+      if (cmd === "engine_path") return Promise.resolve("p4");
+      if (cmd === "engine_status") {
+        return id === WORKSPACE_B.id
+          ? bStatus.promise
+          : Promise.resolve("987654");
+      }
+      return Promise.resolve();
+    });
+    h.fixtures.workspaces.list = [WORKSPACE, WORKSPACE_B];
+    h.fixtures.workspaces.selected = WORKSPACE;
+
+    const { rerender } = renderWithI18n(<App />);
+    // Positive signal: A's CL was genuinely produced and rendered.
+    await waitFor(() => {
+      expect(screen.getByText("987654")).toBeDefined();
+    });
+    expect(
+      screen.getByRole("button", { name: t("sync.engineP4.updateButton") }),
+    ).toBeDefined();
+
+    h.fixtures.workspaces.selected = WORKSPACE_B;
+    rerender(<App />);
+
+    // B's engine card still renders (so the absence below is specifically the
+    // CL, not a card that failed to render) while B's status probe is pending.
+    await waitFor(() => {
+      expect(
+        screen.getByRole("button", { name: t("sync.engineP4.updateButton") }),
+      ).toBeDefined();
+    });
+    expect(screen.queryByText("987654")).toBeNull();
+
+    await act(async () => {
+      bStatus.resolve(null);
+    });
+  });
 });
