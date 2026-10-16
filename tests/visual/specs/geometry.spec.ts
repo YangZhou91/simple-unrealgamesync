@@ -3,7 +3,7 @@
 // swept across 80 combinations (10 surfaces x dark/light x 1056/768/392/352,
 // height 1300) plus the focused states, asserting zero out-of-bounds visible
 // elements per combination — in BOTH locales (zh ledger ids byte-identical, en
-// ids suffixed -en; 160 matrix rows + 34 focused rows = 194).
+// ids suffixed -en; 160 matrix rows + 40 focused rows = 200).
 //
 // D-04 separation: this file contains ZERO screenshot expectations — pixels
 // are Plan 03 (visual.spec.ts). Geometry is zero-tolerance and font-agnostic.
@@ -278,6 +278,56 @@ for (const locale of LOCALES) {
       await page.getByRole("button", { name: t("sync.git.pull") }).click();
       await expect(page.getByText(t("sync.git.success"))).toBeVisible();
       await assertCleanAndInBounds(page, fid("git-success-dark-1056"));
+    });
+
+    // Phase 31 (PTHS-01): the three resolved path states measured in bounds.
+    // idle-git-only — the git-resolving workspace renders the Git card only
+    // (P4 engine card DOM-absent). The `.git` leg in bounds.
+    test("focused: idle-git-only dark-1056", async ({ page }) => {
+      await setTheme(page, "dark");
+      await setViewportSize(page, 1056);
+      await gotoHarness(page, { workspaces: "git", locale });
+      await expect(
+        page.getByRole("button", { name: t("sync.git.pull") }),
+      ).toBeVisible();
+      await expect(
+        page.getByRole("button", { name: t("sync.engineP4.updateButton") }),
+      ).toHaveCount(0);
+      await assertCleanAndInBounds(page, fid("idle-git-only-dark-1056"));
+    });
+
+    // idle-no-path — neither path: both engine cards DOM-absent and exactly one
+    // muted line (PTHS-02's proof row). Asserting the line VISIBLE also proves
+    // the probe resolved, so the capture/measure can never sit mid-transient.
+    test("focused: idle-no-path dark-1056", async ({ page }) => {
+      await setTheme(page, "dark");
+      await setViewportSize(page, 1056);
+      await gotoHarness(page, { workspaces: "nopath", locale });
+      await expect(
+        page.getByRole("button", { name: t("sync.git.pull") }),
+      ).toHaveCount(0);
+      await expect(
+        page.getByRole("button", { name: t("sync.engineP4.updateButton") }),
+      ).toHaveCount(0);
+      await expect(page.getByText(t("sync.enginePath.none"))).toBeVisible();
+      await assertCleanAndInBounds(page, fid("idle-no-path-dark-1056"));
+    });
+
+    // idle-no-path at 352 — the muted line's long-text narrow-wrap backstop
+    // (UI-SPEC §12 held-out row): the en (~40 chars) and zh (12 CJK) strings
+    // must wrap inside the panel without horizontal overflow, both locales.
+    test("focused: idle-no-path dark-352", async ({ page }) => {
+      await setTheme(page, "dark");
+      await setViewportSize(page, 352);
+      await gotoHarness(page, { workspaces: "nopath", locale });
+      await expect(
+        page.getByRole("button", { name: t("sync.git.pull") }),
+      ).toHaveCount(0);
+      await expect(
+        page.getByRole("button", { name: t("sync.engineP4.updateButton") }),
+      ).toHaveCount(0);
+      await expect(page.getByText(t("sync.enginePath.none"))).toBeVisible();
+      await assertCleanAndInBounds(page, fid("idle-no-path-dark-352"));
     });
 
     // Phase 30 (30-05): the browser-proven engine terminal states. success /
