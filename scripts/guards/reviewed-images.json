@@ -49,11 +49,11 @@
   },
   {
     "path": "tests/visual/baselines/add.png",
-    "sha256": "482cec594f7ac50cc29df1b073b9dd798d28a27d11268791a46ba3c5eefd5d2c"
+    "sha256": "695558b1df1f1646002400407dca0fa28910f383ff6106109c8cde5df8b8a542"
   },
   {
     "path": "tests/visual/baselines/app-settings.png",
-    "sha256": "64c39b9d64fc2a9127772aba116e387920114f57f80f9be61c31035b46f40715"
+    "sha256": "a7ff1eca47c66674084ea690028a6781de8c1bd544dfe12079015942318a25ce"
   },
   {
     "path": "tests/visual/baselines/engine-partial.png",
@@ -69,7 +69,7 @@
   },
   {
     "path": "tests/visual/baselines/health.png",
-    "sha256": "e98daf35bc2e9a7c98cf7cc18f3e46d15218ccfc09d3060e4bc72744e12ee8df"
+    "sha256": "ece73aeaf8c146102cb3f5b03b06c5f77b0e3b7035166c729a75d857af1519ae"
   },
   {
     "path": "tests/visual/baselines/history.png",
@@ -77,15 +77,19 @@
   },
   {
     "path": "tests/visual/baselines/idle.png",
-    "sha256": "d3181e990622374e80c427be03eb19006a393515bbeb394a1bb8a356991ac4e7"
+    "sha256": "4325960aa307234b96117bc3f9b6337c1a2781dfa7a54c0c3674386823858dd9"
+  },
+  {
+    "path": "tests/visual/baselines/idle-no-path.png",
+    "sha256": "6f45b6e7c2670f0e6226b28b948cbaf3eb2ca35e9330e24a728218de816d39e3"
   },
   {
     "path": "tests/visual/baselines/light.png",
-    "sha256": "2e5376e5ced6544f562b7f285a2f531704a461cb85b09732abbc90c153117f7a"
+    "sha256": "ceaadecdc2320dcfcbcc910db2af7790b4d7b2b04333848000e22549dd5d62fa"
   },
   {
     "path": "tests/visual/baselines/narrow.png",
-    "sha256": "ba9dfb71ccd6a3cc0dadf5ead2a9cfff07aec453dee48f9927cd29b237765a58"
+    "sha256": "54d62ba58bb78e31e13050dbff57450f17890bdb0039b980b26ec86f675ad2a0"
   },
   {
     "path": "tests/visual/baselines/rollback.png",
@@ -97,11 +101,11 @@
   },
   {
     "path": "tests/visual/baselines/settings.png",
-    "sha256": "b8e03f40ff9157e83f25cc9efa4b42611aa8b1a0d1240735c61216e6885fe041"
+    "sha256": "bc9d541526b608180e32178d7f7f65fc940ab57e61e51ec8eea5013c30783859"
   },
   {
     "path": "tests/visual/baselines/target.png",
-    "sha256": "82dbf2d5367c9493a9aa2c5d9b59f8db89e477e1d56f5bbcd0559553b2f488c7"
+    "sha256": "cd3ebb1cb501fb821e890702166df883cb2af8b4f6c10067e85562b03e2c65c8"
   },
   {
     "path": "tests/visual/canonical/ugs-code-add.png",

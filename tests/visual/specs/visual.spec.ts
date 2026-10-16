@@ -80,6 +80,23 @@ test.describe("canonical captures (dark 1056)", () => {
     });
   });
 
+  test("capture: idle-no-path", async ({ page }) => {
+    await setTheme(page, "dark");
+    await setViewportSize(page, 1056);
+    // Phase 31 (D-08/PTHS-02): the neither-path idle — mirrors capture: idle
+    // exactly, but booted on the no-path fixture mode (both engine cards
+    // DOM-absent, the one muted line in their place). Assert the line is up
+    // BEFORE the screenshot so the capture can never sit mid-transient
+    // (Pitfall 9) — the visible assertion also proves the probe resolved.
+    await gotoHarness(page, { workspaces: "nopath" });
+    await setView(page, "idle");
+    await expect(page.getByText(tZh("sync.enginePath.none"))).toBeVisible();
+    await settleFrame(page);
+    await expect(page).toHaveScreenshot("idle-no-path.png", {
+      mask: [lastSyncTimeLocator(page)],
+    });
+  });
+
   test("capture: target", async ({ page }) => {
     await setTheme(page, "dark");
     await setViewportSize(page, 1056);
