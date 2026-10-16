@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { screen, fireEvent, act, waitFor } from "@testing-library/react";
 import App from "@/App";
 import { makeT, renderWithI18n } from "@/lib/i18n";
@@ -312,5 +312,113 @@ describe("App SYNC-03 ownership wiring (26-03)", () => {
       screen.queryByRole("button", { name: t("sync.git.pull") }),
     ).toBeNull();
     expect(h.startGitPull).not.toHaveBeenCalled();
+  });
+});
+
+// Phase 31 (D-04/D-09, PTHS-01): the App-level enginePath wiring. The shared
+// invoke mock at L56-59 is the blanket `vi.fn(() => Promise.resolve())`, which
+// resolves `undefined` — type-dishonest for a token assertion and enough to
+// leave the probe at "unknown" (RESEARCH Pitfall 5). Inside THIS describe only,
+// re-implement it cmd-aware so `engine_path` answers a real token, then restore
+// the blanket impl in afterEach so no other describe is affected.
+describe("App enginePath wiring (Phase 31)", () => {
+  type CmdAwareInvoke = {
+    mockImplementation: (fn: (cmd: string) => Promise<unknown>) => void;
+    mock: { calls: unknown[][] };
+  };
+
+  async function setInvoke(impl: (cmd: string) => Promise<unknown>) {
+    const core = await import("@tauri-apps/api/core");
+    (vi.mocked(core.invoke) as unknown as CmdAwareInvoke).mockImplementation(impl);
+  }
+
+  async function invokeMock() {
+    const core = await import("@tauri-apps/api/core");
+    return vi.mocked(core.invoke) as unknown as CmdAwareInvoke;
+  }
+
+  function enginePathCalls(inv: CmdAwareInvoke) {
+    return inv.mock.calls.filter((c) => c[0] === "engine_path").length;
+  }
+
+  beforeEach(async () => {
+    resetFixtures();
+    await setInvoke((cmd) =>
+      cmd === "engine_path" ? Promise.resolve("none") : Promise.resolve(),
+    );
+  });
+
+  afterEach(async () => {
+    await setInvoke(() => Promise.resolve());
+  });
+
+  it('threads the resolved token to the idle surface (engine_path -> "none" renders the muted line)', async () => {
+    const t = makeT("en");
+    renderWithI18n(<App />);
+    await waitFor(() => {
+      expect(screen.getByText(t("sync.enginePath.none"))).toBeDefined();
+    });
+    // ...and neither card survives alongside it.
+    expect(screen.queryByRole("button", { name: t("sync.git.pull") })).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: t("sync.engineP4.updateButton") }),
+    ).toBeNull();
+  });
+
+  it("resets to the both-cards default when the workspace is deselected (D-09)", async () => {
+    const t = makeT("en");
+    const { rerender } = renderWithI18n(<App />);
+    await waitFor(() => {
+      expect(screen.getByText(t("sync.enginePath.none"))).toBeDefined();
+    });
+
+    h.fixtures.workspaces.selected = null;
+    rerender(<App />);
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: t("sync.git.pull") })).toBeDefined();
+    });
+    expect(
+      screen.getByRole("button", { name: t("sync.engineP4.updateButton") }),
+    ).toBeDefined();
+    // "no workspace" is NEVER "none" — the muted line must not render.
+    expect(screen.queryByText(t("sync.enginePath.none"))).toBeNull();
+  });
+
+  it("keeps the both-cards default and never errors the UI when the probe rejects", async () => {
+    const t = makeT("en");
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    await setInvoke((cmd) =>
+      cmd === "engine_path"
+        ? Promise.reject(new Error("engine_path probe failed"))
+        : Promise.resolve(),
+    );
+
+    renderWithI18n(<App />);
+
+    await waitFor(() => expect(errSpy).toHaveBeenCalled());
+    // Both cards stay; no muted line; no error surface, no crash.
+    expect(screen.getByRole("button", { name: t("sync.git.pull") })).toBeDefined();
+    expect(
+      screen.getByRole("button", { name: t("sync.engineP4.updateButton") }),
+    ).toBeDefined();
+    expect(screen.queryByText(t("sync.enginePath.none"))).toBeNull();
+
+    errSpy.mockRestore();
+  });
+
+  it("re-probes after a sync terminal (D-04 completion leg)", async () => {
+    renderWithI18n(<App />);
+    const inv = await invokeMock();
+    await waitFor(() => expect(enginePathCalls(inv)).toBeGreaterThan(0));
+    const before = enginePathCalls(inv);
+
+    const { onSyncComplete } = lastSyncHooks();
+    expect(onSyncComplete).toBeDefined();
+    await act(async () => {
+      onSyncComplete!("99999");
+    });
+
+    expect(enginePathCalls(inv)).toBeGreaterThan(before);
   });
 });

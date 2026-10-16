@@ -14,9 +14,9 @@ import { useEngineUpdate } from "@/hooks/useEngineUpdate";
 import { useBehindCheck } from "@/hooks/useBehindCheck";
 import { useHistory } from "@/hooks/useHistory";
 import { useUpdater } from "@/hooks/useUpdater";
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
 import * as commands from "@/lib/commands";
-import type { GitBranchInfo, WarningEntry } from "@/lib/types";
+import type { EnginePath, GitBranchInfo, WarningEntry } from "@/lib/types";
 
 function App() {
   const workspaces = useWorkspaces();
@@ -29,6 +29,45 @@ function App() {
   // per-completion-path branch in the render layer, so all three completion
   // paths render identically through the same IdlePanel.
   const [lastSyncWarnings, setLastSyncWarnings] = useState<WarningEntry[]>([]);
+
+  // Phase 31 (D-01/D-04/D-09, PTHS-01): the engine-update path token, lifted
+  // here rather than beside engineCl because onSyncComplete's useCallback deps
+  // include fetchEnginePath — a later `const` would be in the TDZ at the deps
+  // array's evaluation point. The probe is one invoke with no Channel/log/step
+  // machine, so it stays App-lifted state (no new hook, 31-RESEARCH P2).
+  const [enginePath, setEnginePath] = useState<EnginePath>("unknown");
+  // Monotonically-increasing request guard — the Phase 27 useBehindCheck
+  // precedent (useBehindCheck.ts:15-23). A rapid A->B workspace switch must not
+  // apply A's stale probe response.
+  const enginePathRequestIdRef = useRef(0);
+
+  const fetchEnginePath = useCallback(async () => {
+    const requestId = ++enginePathRequestIdRef.current;
+    if (workspaces.selectedWorkspace) {
+      try {
+        const p = await commands.enginePath(workspaces.selectedWorkspace.id);
+        // Drop a stale response from a superseded request.
+        if (requestId !== enginePathRequestIdRef.current) return;
+        // Narrowing guard: the blanket vitest invoke mock resolves `undefined`,
+        // which must never reach state (RESEARCH Pitfall 5).
+        if (p === "git" || p === "p4" || p === "none") {
+          setEnginePath(p);
+        }
+      } catch (e) {
+        // Stay at "unknown" = the both-cards status-quo render (UI-SPEC §9.3).
+        // Never error the UI over a failed stat.
+        console.error("Engine path probe failed:", e);
+      }
+    } else {
+      // D-09: no workspace selected is NEVER "none".
+      setEnginePath("unknown");
+    }
+  }, [workspaces.selectedWorkspace]);
+
+  // D-04's switch leg: re-probe on workspace switch (mirrors fetchGitStatus).
+  useEffect(() => {
+    fetchEnginePath();
+  }, [fetchEnginePath]);
 
   const onRollbackComplete = useCallback(
     (cl: string | null, warnings: WarningEntry[]) => {
@@ -48,8 +87,11 @@ function App() {
     (cl: string | null) => {
       refreshCurrentCl(cl);
       history.loadHistory();
+      // Phase 31 (D-04): re-probe the engine path after a sync/rollback
+      // terminal, so D-02's external `.git` rename escape hatch re-resolves.
+      fetchEnginePath();
     },
-    [refreshCurrentCl, history.loadHistory],
+    [refreshCurrentCl, history.loadHistory, fetchEnginePath],
   );
   // Phase 14 (SUMM-23): forward/force-sync warnings flow UP via the
   // onWarningsChange callback (Plan 14-01 Task 2 added the param).
@@ -229,11 +271,13 @@ function App() {
       try {
         await git.startGitPull(workspaces.selectedWorkspace.id);
         fetchGitStatus();
+        // Phase 31 (D-04): re-probe after a git-pull terminal.
+        fetchEnginePath();
       } catch {
         // Error handling is done in useGit hook
       }
     }
-  }, [workspaces.selectedWorkspace, git.startGitPull, fetchGitStatus, isOperationRunning]);
+  }, [workspaces.selectedWorkspace, git.startGitPull, fetchGitStatus, fetchEnginePath, isOperationRunning]);
 
   const handleEngineUpdate = useCallback(async () => {
     if (isOperationRunning) {
@@ -249,11 +293,13 @@ function App() {
         // Refresh the engine have-CL after the run so the D-10 status row is
         // honest, exactly as the git handler refreshes the branch.
         fetchEngineCl();
+        // Phase 31 (D-04): re-probe after an engine-update terminal.
+        fetchEnginePath();
       } catch {
         // Error handling is done in useEngineUpdate hook
       }
     }
-  }, [workspaces.selectedWorkspace, engine.startEngineUpdate, fetchEngineCl, isOperationRunning]);
+  }, [workspaces.selectedWorkspace, engine.startEngineUpdate, fetchEngineCl, fetchEnginePath, isOperationRunning]);
 
   // D-11 partial-state Retry reuses the same engine_update command — no new
   // command is introduced (UI-SPEC §8.4).
@@ -265,11 +311,13 @@ function App() {
       try {
         await engine.startEngineUpdate(workspaces.selectedWorkspace.id);
         fetchEngineCl();
+        // Phase 31 (D-04): re-probe after the retry terminal.
+        fetchEnginePath();
       } catch {
         // Error handling is done in useEngineUpdate hook
       }
     }
-  }, [workspaces.selectedWorkspace, engine.startEngineUpdate, fetchEngineCl, isOperationRunning]);
+  }, [workspaces.selectedWorkspace, engine.startEngineUpdate, fetchEngineCl, fetchEnginePath, isOperationRunning]);
 
   return (
     <TooltipProvider>
@@ -357,6 +405,7 @@ function App() {
             engineResultCl={engine.resultCl}
             engineIsCancelling={engine.isCancelling}
             engineCl={engineCl}
+            enginePath={enginePath}
             onEngineUpdate={handleEngineUpdate}
             onStopEngineUpdate={engine.stopEngineUpdate}
             // On dismiss, re-fetch the engine have-CL so the idle row shows the
