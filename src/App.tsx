@@ -152,6 +152,13 @@ function App() {
   // renders the label alone). Distinct from workspaces.currentCl, which is
   // the PROJECT's CL and must never appear in the engine card.
   const [engineCl, setEngineCl] = useState<string | null>(null);
+  // Phase 31 WR-01 fold: the id engineCl was resolved for. Same root cause
+  // class and same file as the gap-#1 fix — the sibling derivation had no
+  // identity reset, so the engine card could carry the PREVIOUS workspace's
+  // have-CL across a switch. The catch -> setEngineCl(null) and the
+  // null-workspace branch already cover the failure and no-workspace legs, so
+  // only the identity reset is added.
+  const engineClWorkspaceIdRef = useRef<string | null>(null);
   // P4 stream of the selected workspace's client spec (null = classic client
   // OR not-yet-fetched OR fetch failed — the UI shows the `classic client`
   // placeholder in all three cases). Static per-client — fetched once on
@@ -183,6 +190,15 @@ function App() {
   // switch, mirroring fetchGitStatus — non-blocking, failure → null (the
   // status row renders the label alone).
   const fetchEngineCl = useCallback(async () => {
+    // WR-01 fold: clear on a selected-workspace identity change BEFORE the
+    // await, so the engine card never shows another workspace's CL for the
+    // in-flight window. A same-workspace re-fetch (the D-10 dismiss/engine-update
+    // legs) keeps the current value on screen.
+    const selectedId = workspaces.selectedWorkspace?.id ?? null;
+    if (selectedId !== engineClWorkspaceIdRef.current) {
+      engineClWorkspaceIdRef.current = selectedId;
+      setEngineCl(null);
+    }
     if (workspaces.selectedWorkspace) {
       try {
         const cl = await commands.engineStatus(workspaces.selectedWorkspace.id);
