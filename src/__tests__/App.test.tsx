@@ -680,4 +680,26 @@ describe("App enginePath wiring (Phase 31)", () => {
       bStatus.resolve(null);
     });
   });
+
+  // IN-03: pin one of the four D-04 completion re-probe legs BEHAVIORALLY rather
+  // than only by a source-text grep. The git-pull leg is reachable through the
+  // real button here; the engine-update/engine-retry legs are deferred (their
+  // hook runs real in this harness — see the SUMMARY's Dispositions).
+  it("re-probes after a git-pull terminal (D-04 completion leg, IN-03)", async () => {
+    const t = makeT("en");
+    // engine_path -> "git" so the Git card (and its Start Git Pull button)
+    // actually renders; the describe's beforeEach answers "none" for this cmd.
+    await setInvoke((cmd) =>
+      cmd === "engine_path" ? Promise.resolve("git") : Promise.resolve(),
+    );
+
+    renderWithI18n(<App />);
+    const inv = await invokeMock();
+    await waitFor(() => expect(enginePathCalls(inv)).toBeGreaterThan(0));
+    const before = enginePathCalls(inv);
+
+    fireEvent.click(screen.getByRole("button", { name: t("sync.git.pull") }));
+
+    await waitFor(() => expect(enginePathCalls(inv)).toBeGreaterThan(before));
+  });
 });
