@@ -14,6 +14,17 @@
 // CSS side-effect import (tests/visual/main.tsx `import("@/index.css")`).
 declare module "*.css";
 
+// PNG imports (src/components/layout/AppTitleBar.tsx `import appIcon from
+// "@/assets/app-icon.png"`). D-10(a) / Phase 31: tsconfig.visual.json's
+// `"types": ["node"]` REPLACES the default type acquisition, so Vite's
+// ambient `*.png` declaration (from vite/client) drops out of the visual-tree
+// program and AppTitleBar.tsx:21 errors with TS2307. Unlike `virtual:changelog`
+// below, this declaration deliberately has NO src/ twin: the root
+// src/vite-env.d.ts gets the same declaration from `/// <reference
+// types="vite/client" />`, which the root tsconfig (include: ["src"]) does
+// acquire. Test-only — closes the Phase 23 contract regression.
+declare module "*.png";
+
 // vite-plugin-git-changelog virtual module (src/components/layout/Sidebar.tsx).
 // Mirrors src/vite-env.d.ts verbatim (T-23-03: keep the two in sync).
 declare module "virtual:changelog" {

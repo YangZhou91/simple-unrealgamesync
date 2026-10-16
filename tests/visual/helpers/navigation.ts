@@ -66,10 +66,12 @@ export type MatrixView =
  */
 export type EngineFocusedView = "engine-success" | "engine-error" | "engine-partial";
 
-/** Harness URL params — locale + workspaces seeding (23-01 entry contract). */
+/** Harness URL params — locale + workspaces seeding (23-01 entry contract;
+ *  Phase 31 adds the `git`/`nopath` path-resolution modes — same DEV workspace,
+ *  different mock `engine_path` answer). */
 export interface HarnessOptions {
   locale?: "zh" | "en";
-  workspaces?: "default" | "empty" | "long";
+  workspaces?: "default" | "empty" | "long" | "git" | "nopath";
 }
 
 /** Open the harness page with URL-param seeding (?locale, ?workspaces). */

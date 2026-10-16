@@ -191,15 +191,28 @@ export const FIXTURE_HEALTH_REPORT: WorkspaceHealthReport = {
   stream: FIXTURE_STREAM,
 };
 
-/** Workspace list per harness workspaces mode (?workspaces=default|empty|long). */
+/**
+ * Workspace list per harness workspaces mode
+ * (?workspaces=default|empty|long|git|nopath).
+ *
+ * Phase 31 (D-01/PTHS-01): `git` and `nopath` are PATH-RESOLUTION modes, not
+ * new workspace lists — they seed the SAME single DEV workspace as `default`.
+ * The mock's `engine_path` answer (git → "git", nopath → "none", default/long
+ * → "p4") is what differs, so every mode keeps the identical workspace
+ * identity (name, sidebar, header) and no non-idle golden's pixels shift.
+ */
 export function workspacesForMode(
-  mode: "default" | "empty" | "long",
+  mode: "default" | "empty" | "long" | "git" | "nopath",
 ): WorkspaceConfig[] {
   switch (mode) {
     case "empty":
       return [];
     case "long":
       return [FIXTURE_WORKSPACE_DEV, FIXTURE_WORKSPACE_LONG];
+    case "git":
+    case "nopath":
+      // Same workspace as default; only the mock's engine_path answer differs.
+      return [FIXTURE_WORKSPACE_DEV];
     default:
       return [FIXTURE_WORKSPACE_DEV];
   }

@@ -50,8 +50,16 @@ export type CanonicalView =
   | "git-error"
   | "rollback";
 
-/** Fixture workspace seeding mode (?workspaces=default|empty|long). */
-export type WorkspacesMode = "default" | "empty" | "long";
+/**
+ * Fixture workspace seeding mode (?workspaces=default|empty|long|git|nopath).
+ *
+ * Phase 31 (D-01): `git` and `nopath` seed the SAME single DEV workspace as
+ * `default` (ws-fixture-dev) — only the mock's `engine_path` answer differs
+ * ("git" / "none" vs "p4"). The mode selects which backend PATH answer the
+ * fixture simulates, never a different workspace list — which keeps every
+ * non-idle golden's pixels byte-identical (same sidebar, same header).
+ */
+export type WorkspacesMode = "default" | "empty" | "long" | "git" | "nopath";
 
 type TerminalEvent = Extract<
   SyncEvent,

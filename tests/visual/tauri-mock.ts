@@ -7,6 +7,7 @@
 // new boot command surfaces immediately instead of silently returning
 // undefined.
 import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
+import type { GitBranchInfo } from "@/lib/types";
 import { harnessController } from "./fixtures/controller";
 import {
   FIXTURE_ADDED_WORKSPACE,
@@ -27,6 +28,21 @@ const FIXTURE_LOG_PATH = "D:\\Fixtures\\logs\\sugs.log";
 // idle engine card's status row. A fixed fixture literal — deterministic
 // captures; never the project's Current CL.
 const FIXTURE_ENGINE_CL = "381234";
+
+// Phase 31 (DEGR-01 / 31-RESEARCH Open Question 3, resolved as include): the
+// empty GitBranchInfo the mock returns for workspaces WITHOUT a git repo —
+// mirrors git_service.rs:453's empty defaults so WorkspaceHeader renders the
+// honest Unavailable + help treatment exactly as production would without
+// .git. The git identity lives in a collapsed <details>, so no capture pixel
+// depends on it.
+const EMPTY_GIT_BRANCH: GitBranchInfo = {
+  branch: "",
+  ahead: 0,
+  behind: 0,
+  remote: "",
+  short_hash: "",
+  is_detached: false,
+};
 
 // Phase 24 (24-02, SHELL-02): titlebar adapter call log. Records the exact
 // IPC command names the AppTitleBar buttons invoke, in click order, so specs
@@ -91,11 +107,38 @@ export function createHarness(): void {
       case "get_workspace_stream":
         return FIXTURE_STREAM;
       case "git_status":
-        return FIXTURE_GIT_BRANCH;
+        // Phase 31 (DEGR-01): per-mode — the populated branch on git mode
+        // (git-running.png byte-identity), the honest empty defaults on
+        // default/long/nopath (the workspace has no .git).
+        return harnessController.workspacesMode === "git"
+          ? FIXTURE_GIT_BRANCH
+          : EMPTY_GIT_BRANCH;
       // Phase 30 (30-05, D-10): the engine have-CL query. Fixed fixture literal
       // so the idle engine card's status row is deterministic.
       case "engine_status":
         return FIXTURE_ENGINE_CL;
+      // Phase 31 (D-01/PTHS-01): the engine-path probe. Validates the workspace
+      // id against this mode's fixtures (fail-closed, shaped like the
+      // switch_workspace guard below), then answers by mode — git → "git",
+      // nopath → "none", default/long → "p4". The workspace identity is the
+      // SAME in every mode; only this answer differs.
+      case "engine_path": {
+        const workspaceId = String(arg(args).workspaceId);
+        const known = workspacesForMode(harnessController.workspacesMode).some(
+          (ws) => ws.id === workspaceId,
+        );
+        if (!known) {
+          throw new Error(`fixture: engine_path unknown workspace ${workspaceId}`);
+        }
+        switch (harnessController.workspacesMode) {
+          case "git":
+            return "git";
+          case "nopath":
+            return "none";
+          default:
+            return "p4";
+        }
+      }
       case "get_history":
         return FIXTURE_HISTORY;
       case "get_changelists":

@@ -13,14 +13,16 @@ import { harnessController } from "./fixtures/controller";
 import { createRoot } from "react-dom/client";
 
 // 1) Seed the fixture controller from URL search params BEFORE anything else
-//    (?locale=zh|en pins I18nProvider; ?workspaces=default|empty|long seeds
-//    the controller's workspace mode).
+//    (?locale=zh|en pins I18nProvider; ?workspaces=default|empty|long|git|nopath
+//    seeds the controller's workspace mode).
 const params = new URLSearchParams(window.location.search);
 const workspacesParam = params.get("workspaces");
 if (
   workspacesParam === "default" ||
   workspacesParam === "empty" ||
-  workspacesParam === "long"
+  workspacesParam === "long" ||
+  workspacesParam === "git" ||
+  workspacesParam === "nopath"
 ) {
   harnessController.setWorkspacesMode(workspacesParam);
 }

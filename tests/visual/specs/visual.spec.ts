@@ -120,7 +120,10 @@ test.describe("canonical captures (dark 1056)", () => {
   test("capture: git-running", async ({ page }) => {
     await setTheme(page, "dark");
     await setViewportSize(page, 1056);
-    await gotoHarness(page);
+    // Phase 31 (D-01): the git leg lives on the git-resolving fixture mode —
+    // same workspace identity, so the capture's pixels are unchanged (the
+    // byte-identity gate proves it).
+    await gotoHarness(page, { workspaces: "git" });
     // git-running-hold: deterministic fixture progress (42% Receiving objects)
     // and log literals via CANONICAL_SCRIPTS injected by gotoHarness.
     await setView(page, "git-running");

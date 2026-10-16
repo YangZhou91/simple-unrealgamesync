@@ -41,6 +41,15 @@ const MATRIX_VIEWS: MatrixView[] = [
   "settings",
 ];
 
+/**
+ * Phase 31 (D-01): the two git legs only exist on a `.git`-resolving workspace
+ * — those two matrix views boot the `git` fixture mode (Git card present); every
+ * other view boots the default (p4) mode. The workspace identity is identical in
+ * both modes, so only the engine-path answer changes.
+ */
+const modeForView = (view: MatrixView): "git" | "default" =>
+  view === "git-running" || view === "git-error" ? "git" : "default";
+
 const THEMES = ["dark", "light"] as const;
 
 /**
@@ -98,7 +107,7 @@ for (const locale of LOCALES) {
           test(`bounds: ${id}`, async ({ page }) => {
             await setTheme(page, theme);
             await setViewportSize(page, width);
-            await gotoHarness(page, { locale });
+            await gotoHarness(page, { locale, workspaces: modeForView(view) });
             await setView(page, view, locale);
             await assertCleanAndInBounds(page, id);
           });
@@ -251,10 +260,12 @@ for (const locale of LOCALES) {
       await assertCleanAndInBounds(page, fid("cancel-pending-dark-1056"));
     });
     // git-success: git pull with "git-quick-success" (terminal success banner).
+    // Phase 31: boots the git-resolving mode — the Git card is where the pull
+    // button lives.
     test("focused: git-success dark-1056", async ({ page }) => {
       await setTheme(page, "dark");
       await setViewportSize(page, 1056);
-      await gotoHarness(page, { locale });
+      await gotoHarness(page, { locale, workspaces: "git" });
       await page.evaluate(
         (scenario) =>
           (

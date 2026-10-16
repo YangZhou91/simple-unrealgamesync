@@ -124,13 +124,12 @@ async function runCanonicalScript(
   await page.getByRole("button", { name: t("sync.error.dismiss") }).click();
   await expect(page.getByText(t("sync.p4.cardTitle"))).toBeVisible();
 
-  // Canonical step 8: git-error — action offers back-to-idle only.
-  await setNextScenario(page, "git-error");
-  await page.getByRole("button", { name: t("sync.git.pull") }).click();
-  const gitBackButton = page.getByRole("button", { name: t("sync.git.back") });
-  await expect(gitBackButton).toBeVisible();
-  await gitBackButton.click();
-  await expect(page.getByText(t("sync.p4.cardTitle"))).toBeVisible();
+  // Canonical step 8 (Phase 31, PTHS-01/D-01): the git leg moved to its own
+  // test (runGitLegScript below) because the default fixture now resolves the
+  // P4 path — the Git card is DOM-absent at idle here. Assert exactly that: the
+  // strongest idle-time form of the phase's render rule, complementing the
+  // while-engine-running count-0 probe at step 8b below.
+  await expect(page.getByRole("button", { name: t("sync.git.pull") })).toHaveCount(0);
 
   // Canonical step 8b (Phase 30, ENGU-02 / D-12): the P4 engine update reaches
   // its running surface and holds the shared operation lock. While it runs the
@@ -236,6 +235,45 @@ async function runCanonicalScript(
   expect(pageErrors).toEqual([]);
 }
 
+/**
+ * Phase 31 (D-01 / UI-SPEC §11.2 — the explicitly sanctioned split): the git
+ * leg as its own test, because it needs the `?workspaces=git` fixture mode.
+ * Boots the git-resolving workspace, asserts the git-mode render matrix at the
+ * interaction layer (the surviving Git card alive; the P4 engine card DOM-
+ * absent), then runs the PRESERVED canonical step 8 body (git-error → back to
+ * idle). Its own pageerror window + cleanliness gate, mirroring the main script.
+ */
+async function runGitLegScript(
+  page: Page,
+  locale: HarnessLocale,
+): Promise<void> {
+  const t = locale === "en" ? tEn : tZh;
+
+  const pageErrors: string[] = [];
+  page.on("pageerror", (error) => pageErrors.push(error.message));
+
+  await gotoHarness(page, { locale, workspaces: "git" });
+
+  // The git-mode render matrix: Git Pull is alive; the P4 engine card's button
+  // is DOM-absent (a plain conditional, not hidden/disabled).
+  const gitPullButton = page.getByRole("button", { name: t("sync.git.pull") });
+  await expect(gitPullButton).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: t("sync.engineP4.updateButton") }),
+  ).toHaveCount(0);
+
+  // Preserved canonical step 8: git-error — action offers back-to-idle only.
+  await setNextScenario(page, "git-error");
+  await gitPullButton.click();
+  const gitBackButton = page.getByRole("button", { name: t("sync.git.back") });
+  await expect(gitBackButton).toBeVisible();
+  await gitBackButton.click();
+  // Back at idle: the primary Perforce project card (always rendered) is up.
+  await expect(page.getByText(t("sync.p4.cardTitle"))).toBeVisible();
+
+  expect(pageErrors).toEqual([]);
+}
+
 test("canonical interaction script reproduces through the production harness (zh)", async ({
   page,
 }) => {
@@ -246,4 +284,16 @@ test("canonical interaction script reproduces through the production harness (en
   page,
 }) => {
   await runCanonicalScript(page, "en");
+});
+
+test("canonical git leg reproduces through the production harness (zh)", async ({
+  page,
+}) => {
+  await runGitLegScript(page, "zh");
+});
+
+test("canonical git leg reproduces through the production harness (en)", async ({
+  page,
+}) => {
+  await runGitLegScript(page, "en");
 });
