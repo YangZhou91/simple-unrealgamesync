@@ -1,4 +1,4 @@
-import type { SyncState, StepStatus, SyncStep, HistoryRecord, GitState, GitBranchInfo, P4BehindInfo, WarningEntry, LastSyncResult, EngineUpdateState } from "@/lib/types";
+import type { SyncState, StepStatus, SyncStep, HistoryRecord, GitState, GitBranchInfo, P4BehindInfo, WarningEntry, LastSyncResult, EngineUpdateState, EnginePath } from "@/lib/types";
 import type { GitProgressState } from "@/lib/gitProgress";
 import { IdlePanel } from "./IdlePanel";
 import { RunningPanel } from "./RunningPanel";
@@ -90,6 +90,10 @@ interface SyncDashboardProps {
   onDismissEngineResult?: () => void;
   onRetryEngineUpdate?: () => void;
   engineCl?: string | null;
+  // Phase 31 (D-01/D-08/D-09): the resolved engine-update path token, threaded
+  // straight through to IdlePanel. Optional with the "unknown" default so the
+  // existing test fixture keeps type-checking — App.tsx threads it at runtime.
+  enginePath?: EnginePath;
 }
 
 export function SyncDashboard({
@@ -145,6 +149,7 @@ export function SyncDashboard({
   onDismissEngineResult = () => {},
   onRetryEngineUpdate = () => {},
   engineCl = null,
+  enginePath = "unknown",
 }: SyncDashboardProps) {
   const { t } = useT();
   const isSyncRunning = syncState === "running";
@@ -252,6 +257,7 @@ export function SyncDashboard({
             currentCl={currentCl}
             onEngineUpdate={onEngineUpdate}
             engineCl={engineCl}
+            enginePath={enginePath}
           />
         )}
       </TabsContent>

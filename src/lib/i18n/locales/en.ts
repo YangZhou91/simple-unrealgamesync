@@ -145,6 +145,9 @@ const en = {
   "sync.engineP4.retry": "Retry Update",
   "sync.engineP4.back": "Back to Idle",
 
+  // ---- Phase 31 (D-08/PTHS-02): the "neither path" muted line ----
+  "sync.enginePath.none": "No engine update path for this workspace",
+
   // ---- Phase 20: SyncDashboard header + tabs ----
   "sync.dash.workspace": "Workspace",
   "sync.dash.noWorkspace": "No workspace selected",

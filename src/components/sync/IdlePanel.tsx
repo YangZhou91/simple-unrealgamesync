@@ -16,7 +16,7 @@ import {
 import { CompletionSummaryPanel } from "./CompletionSummaryPanel";
 import { useT, useStepLabels, resolveSubStep, formatTimestamp } from "@/lib/i18n";
 import { STEP_ORDER } from "@/lib/types";
-import type { GitBranchInfo, LastSyncResult, P4BehindInfo, WarningEntry } from "@/lib/types";
+import type { EnginePath, GitBranchInfo, LastSyncResult, P4BehindInfo, WarningEntry } from "@/lib/types";
 
 interface IdlePanelProps {
   lastSyncResult: LastSyncResult | null;
@@ -57,6 +57,13 @@ interface IdlePanelProps {
   // (never the project's Current CL), rendered hide-null (D-10).
   onEngineUpdate?: () => void;
   engineCl?: string | null;
+  // Phase 31 (D-01/D-08/D-09): the resolved engine-update path token. Optional
+  // with the "unknown" default so existing test fixtures keep type-checking —
+  // App.tsx always threads it at runtime. "unknown" renders BOTH cards (no
+  // workspace selected — D-09 — and the sub-second pre-resolution frame);
+  // "git"/"p4" render exactly one card; "none" renders neither, plus the one
+  // muted line. No translated string ever enters this prop (WIRE-01).
+  enginePath?: EnginePath;
 }
 
 export function IdlePanel({
@@ -77,6 +84,7 @@ export function IdlePanel({
   currentCl = null,
   onEngineUpdate = () => {},
   engineCl = null,
+  enginePath = "unknown",
 }: IdlePanelProps) {
   // Phase 20 (SWEEP-01): CL validation stores a BOOLEAN only — the translated
   // error prose is looked up at render via t("sync.targetCl.error"), never
@@ -221,7 +229,10 @@ export function IdlePanel({
         </div>
       </section>
 
-      {/* 2 — Secondary UnrealEngine Git row */}
+      {/* 2 — Secondary UnrealEngine Git row (Phase 31 D-01: rendered only when
+          the workspace resolves to the Git path; DOM-absent otherwise — a plain
+          conditional, not hidden/display:none) */}
+      {enginePath !== "p4" && enginePath !== "none" && (
       <section className="mt-4 min-w-0 rounded-lg border border-border bg-card p-4 narrow:p-2">
         <div className="flex min-w-0 flex-wrap items-start justify-between gap-x-4 gap-y-2">
           <div className="min-w-0">
@@ -293,12 +304,16 @@ export function IdlePanel({
           </details>
         )}
       </section>
+      )}
 
       {/* 3 — Secondary P4 engine-update row (D-08): a SIBLING of the Git row,
           never a second button inside it, so the Git card's copy stays true and
           Phase 31's path-selection decision (PTHS-01) stays open. The chip is
           the MUTED P4 treatment (info is reserved for Git identity); the D-10
-          status line is the engine subtree's own have-CL, rendered hide-null. */}
+          status line is the engine subtree's own have-CL, rendered hide-null.
+          Phase 31 D-01: rendered only when the workspace resolves to the P4
+          path; DOM-absent otherwise (plain conditional). */}
+      {enginePath !== "git" && enginePath !== "none" && (
       <section className="mt-4 min-w-0 rounded-lg border border-border bg-card p-4 narrow:p-2">
         <div className="flex min-w-0 flex-wrap items-start justify-between gap-x-4 gap-y-2">
           <div className="min-w-0">
@@ -335,6 +350,19 @@ export function IdlePanel({
           </Button>
         </div>
       </section>
+      )}
+
+      {/* Phase 31 (D-08/PTHS-02): the "neither path" muted line. A bare
+          left-aligned paragraph (NOT a card, no border, no icon, no heading) —
+          it replaces BOTH card slots for a selected workspace with neither
+          `.git` nor `UnrealEngine/`. Rendered only for "none"; fault-neutral
+          muted register, never success/warning/destructive (a project-only
+          workspace is not an error). */}
+      {enginePath === "none" && (
+        <p className="mt-4 min-w-0 text-xs text-muted-foreground">
+          {t("sync.enginePath.none")}
+        </p>
+      )}
 
       {/* 4 — Closed five-step disclosure: explanatory chrome only. Labels are
           derived at render from STEP_ORDER + useStepLabels; no action, no

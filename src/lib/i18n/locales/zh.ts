@@ -147,6 +147,9 @@ const zh: Record<MessageKey, string> = {
   "sync.engineP4.retry": "重试更新",
   "sync.engineP4.back": "返回空闲",
 
+  // ---- Phase 31 (D-08/PTHS-02): the "neither path" muted line ----
+  "sync.enginePath.none": "此工作区没有引擎更新路径",
+
   // ---- Phase 20: SyncDashboard header + tabs ----
   "sync.dash.workspace": "工作区",
   "sync.dash.noWorkspace": "未选择工作区",

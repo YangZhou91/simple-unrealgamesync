@@ -858,3 +858,80 @@ describe("IdlePanel engine-update card (Phase 30 D-08/D-10)", () => {
     ).toBeDefined();
   });
 });
+
+// Phase 31 (D-01/D-08/D-09, PTHS-01/PTHS-02, DEGR-01): the render matrix. The
+// optional enginePath prop defaults to "unknown" (both cards), so every
+// existing describe above keeps passing unmodified — the strongest
+// no-regression pin. Absence is asserted as DOM-absent (queryByRole →
+// toBeNull), never visibility/hidden.
+describe("IdlePanel enginePath conditional render (Phase 31)", () => {
+  it('enginePath="git" renders ONLY the Git card (P4 card DOM-absent)', () => {
+    const t = makeT("en");
+    renderWithI18n(<IdlePanel {...baseProps} enginePath="git" />);
+    // The Git card renders.
+    expect(screen.getByRole("heading", { name: t("sync.git.cardTitle") })).toBeDefined();
+    expect(screen.getByRole("button", { name: t("sync.git.pull") })).toBeDefined();
+    // The P4 engine card is gone — not hidden, absent.
+    expect(
+      screen.queryByRole("heading", { name: t("sync.engineP4.cardTitle") }),
+    ).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: t("sync.engineP4.updateButton") }),
+    ).toBeNull();
+    expect(screen.queryByText(t("sync.enginePath.none"))).toBeNull();
+  });
+
+  it('enginePath="p4" renders ONLY the P4 engine card (Git card DOM-absent, DEGR-01)', () => {
+    const t = makeT("en");
+    renderWithI18n(<IdlePanel {...baseProps} enginePath="p4" />);
+    // The P4 engine card renders.
+    expect(
+      screen.getByRole("heading", { name: t("sync.engineP4.cardTitle") }),
+    ).toBeDefined();
+    expect(
+      screen.getByRole("button", { name: t("sync.engineP4.updateButton") }),
+    ).toBeDefined();
+    // The Git card is gone — not hidden, absent.
+    expect(screen.queryByRole("heading", { name: t("sync.git.cardTitle") })).toBeNull();
+    expect(screen.queryByRole("button", { name: t("sync.git.pull") })).toBeNull();
+    expect(screen.queryByText(t("sync.enginePath.none"))).toBeNull();
+  });
+
+  it('enginePath="none" renders NEITHER card and exactly the muted line (PTHS-02)', () => {
+    const t = makeT("en");
+    renderWithI18n(<IdlePanel {...baseProps} enginePath="none" />);
+    // Neither card button survives.
+    expect(screen.queryByRole("button", { name: t("sync.git.pull") })).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: t("sync.engineP4.updateButton") }),
+    ).toBeNull();
+    // ...and the one muted line takes their place.
+    expect(screen.getByText(t("sync.enginePath.none"))).toBeDefined();
+  });
+
+  it("default enginePath with no workspace renders BOTH cards disabled and NO muted line (D-09 pin)", () => {
+    const t = makeT("en");
+    // No enginePath prop at all -> the "unknown" default. hasWorkspace=false is
+    // a DISTINCT state from "neither path": both cards stay, buttons disabled.
+    renderWithI18n(<IdlePanel {...baseProps} hasWorkspace={false} />);
+    expect(
+      (
+        screen.getByRole("button", { name: t("sync.start") }) as HTMLButtonElement
+      ).disabled,
+    ).toBe(true);
+    expect(
+      (
+        screen.getByRole("button", { name: t("sync.git.pull") }) as HTMLButtonElement
+      ).disabled,
+    ).toBe(true);
+    expect(
+      (
+        screen.getByRole("button", {
+          name: t("sync.engineP4.updateButton"),
+        }) as HTMLButtonElement
+      ).disabled,
+    ).toBe(true);
+    // "no workspace" is NEVER "none" — the muted line must not render.
+    expect(screen.queryByText(t("sync.enginePath.none"))).toBeNull();
+  });
+});
