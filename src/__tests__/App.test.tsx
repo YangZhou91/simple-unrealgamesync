@@ -322,15 +322,46 @@ describe("App SYNC-03 ownership wiring (26-03)", () => {
 // re-implement it cmd-aware so `engine_path` answers a real token, then restore
 // the blanket impl in afterEach so no other describe is affected.
 describe("App enginePath wiring (Phase 31)", () => {
+  // Phase 31 gap-closure (IN-02): the mock now receives BOTH invoke arguments,
+  // so `engine_path`/`engine_status` can be routed per `args.workspaceId`. The
+  // escape root cause behind gaps #1/#2 was a mock that ignored the id and
+  // therefore could not express a genuine A->B switch at all.
   type CmdAwareInvoke = {
-    mockImplementation: (fn: (cmd: string) => Promise<unknown>) => void;
+    mockImplementation: (
+      fn: (cmd: string, args?: unknown) => Promise<unknown>,
+    ) => void;
     mock: { calls: unknown[][] };
   };
 
-  async function setInvoke(impl: (cmd: string) => Promise<unknown>) {
+  async function setInvoke(
+    impl: (cmd: string, args?: unknown) => Promise<unknown>,
+  ) {
     const core = await import("@tauri-apps/api/core");
     (vi.mocked(core.invoke) as unknown as CmdAwareInvoke).mockImplementation(impl);
   }
+
+  function argWorkspaceId(args: unknown): string | undefined {
+    return (args as { workspaceId?: string } | undefined)?.workspaceId;
+  }
+
+  function deferred<T>() {
+    let resolve!: (value: T) => void;
+    let reject!: (reason?: unknown) => void;
+    const promise = new Promise<T>((res, rej) => {
+      resolve = res;
+      reject = rej;
+    });
+    return { promise, resolve, reject };
+  }
+
+  // A second workspace fixture, local to this describe — the A->B switch
+  // scenarios are the escape root cause (every prior scenario cold-booted one
+  // workspace and never switched between two resolved ones).
+  const WORKSPACE_B: WorkspaceConfig = {
+    ...WORKSPACE,
+    id: "ws-app-2",
+    name: "AppOwnershipWS2",
+  };
 
   async function invokeMock() {
     const core = await import("@tauri-apps/api/core");
@@ -420,5 +451,104 @@ describe("App enginePath wiring (Phase 31)", () => {
     });
 
     expect(enginePathCalls(inv)).toBeGreaterThan(before);
+  });
+
+  // Gap #1 (31-VERIFICATION must-have truth #6, CR-01): on a genuine A->B
+  // workspace switch the token must be reset to "unknown" BEFORE the new probe
+  // is awaited, so B's WHOLE in-flight window renders the both-cards default —
+  // never A's resolved single card. B's probe is held pending so the assertion
+  // observes the in-flight window rather than the settled state; under the
+  // pre-fix code A's `"git"` token persists and the P4 button stays absent.
+  it("resets the token to the both-cards default on a workspace switch (gap #1)", async () => {
+    const t = makeT("en");
+    const aProbe = deferred<"git" | "p4" | "none">();
+    const bProbe = deferred<"git" | "p4" | "none">();
+    await setInvoke((cmd, args) => {
+      if (cmd !== "engine_path") return Promise.resolve();
+      return argWorkspaceId(args) === WORKSPACE_B.id
+        ? bProbe.promise
+        : aProbe.promise;
+    });
+    h.fixtures.workspaces.list = [WORKSPACE, WORKSPACE_B];
+    h.fixtures.workspaces.selected = WORKSPACE;
+
+    const { rerender } = renderWithI18n(<App />);
+
+    // A resolves to "git" -> the Git card only, P4 absent.
+    await act(async () => {
+      aProbe.resolve("git");
+    });
+    await waitFor(() => {
+      expect(
+        screen.queryByRole("button", { name: t("sync.engineP4.updateButton") }),
+      ).toBeNull();
+    });
+    expect(screen.getByRole("button", { name: t("sync.git.pull") })).toBeDefined();
+
+    // Switch to B while B's probe is STILL PENDING.
+    h.fixtures.workspaces.selected = WORKSPACE_B;
+    rerender(<App />);
+
+    // The discriminator is the P4 button: it renders for "unknown" and "p4".
+    await waitFor(() => {
+      expect(
+        screen.getByRole("button", { name: t("sync.engineP4.updateButton") }),
+      ).toBeDefined();
+    });
+    expect(screen.getByRole("button", { name: t("sync.git.pull") })).toBeDefined();
+    expect(screen.queryByText(t("sync.enginePath.none"))).toBeNull();
+
+    // Settle B to "none" -> the muted neither-line.
+    await act(async () => {
+      bProbe.resolve("none");
+    });
+    await waitFor(() => {
+      expect(screen.getByText(t("sync.enginePath.none"))).toBeDefined();
+    });
+  });
+
+  // The negative half of the reset policy (D-04 cadence): a re-probe of the
+  // SAME workspace must NOT reset the token — the current card stays on screen
+  // for the whole re-probe window. This case fails if the identity guard is
+  // replaced by an unconditional `setEnginePath("unknown")` at the top of the
+  // fetch (that variant flips the surface to both-cards mid-re-probe).
+  it("keeps the current card while a same-workspace re-probe is in flight (no reset)", async () => {
+    const t = makeT("en");
+    let answer: () => Promise<"git" | "p4" | "none"> = () =>
+      Promise.resolve("git");
+    await setInvoke((cmd) =>
+      cmd === "engine_path" ? answer() : Promise.resolve(),
+    );
+
+    renderWithI18n(<App />);
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: t("sync.git.pull") })).toBeDefined();
+    });
+    await waitFor(() => {
+      expect(
+        screen.queryByRole("button", { name: t("sync.engineP4.updateButton") }),
+      ).toBeNull();
+    });
+
+    // Flip the SAME workspace's answer to a held-pending promise — no identity
+    // change, so the reset policy must leave the resolved "git" card alone.
+    const held = deferred<"git" | "p4" | "none">();
+    answer = () => held.promise;
+
+    const { onSyncComplete } = lastSyncHooks();
+    expect(onSyncComplete).toBeDefined();
+    await act(async () => {
+      onSyncComplete!("99999");
+    });
+
+    expect(screen.getByRole("button", { name: t("sync.git.pull") })).toBeDefined();
+    expect(
+      screen.queryByRole("button", { name: t("sync.engineP4.updateButton") }),
+    ).toBeNull();
+    expect(screen.queryByText(t("sync.enginePath.none"))).toBeNull();
+
+    await act(async () => {
+      held.resolve("git");
+    });
   });
 });

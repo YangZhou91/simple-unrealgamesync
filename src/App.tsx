@@ -40,8 +40,28 @@ function App() {
   // precedent (useBehindCheck.ts:15-23). A rapid A->B workspace switch must not
   // apply A's stale probe response.
   const enginePathRequestIdRef = useRef(0);
+  // Phase 31 gap #1 fix (CR-01 / 31-VERIFICATION must-have truth #6): the id
+  // the CURRENT token was resolved for. The token is derived from
+  // (selected-workspace id, probe outcome), so a switch to a DIFFERENT
+  // workspace must clear it synchronously — before the new probe is awaited —
+  // or B renders A's resolved card for B's whole in-flight window. Kept beside
+  // (not folded into) enginePathRequestIdRef, which is complementary rather
+  // than redundant: the request-id guard drops a stale RESPONSE, this ref
+  // clears a stale TOKEN.
+  const enginePathWorkspaceIdRef = useRef<string | null>(null);
 
   const fetchEnginePath = useCallback(async () => {
+    // Phase 31 gap #1 fix: reset on a SELECTED-workspace identity change, never
+    // on a re-probe of the same workspace. The reset is synchronous (before any
+    // await) so the new workspace's entire in-flight window renders the
+    // both-cards default (UI-SPEC §8.1/§9.3) — no spinner, no checking chrome.
+    // D-04's four completion legs re-probe the SAME workspace and must keep the
+    // current card on screen while that probe is in flight.
+    const selectedId = workspaces.selectedWorkspace?.id ?? null;
+    if (selectedId !== enginePathWorkspaceIdRef.current) {
+      enginePathWorkspaceIdRef.current = selectedId;
+      setEnginePath("unknown");
+    }
     const requestId = ++enginePathRequestIdRef.current;
     if (workspaces.selectedWorkspace) {
       try {
@@ -54,8 +74,16 @@ function App() {
           setEnginePath(p);
         }
       } catch (e) {
-        // Stay at "unknown" = the both-cards status-quo render (UI-SPEC §9.3).
-        // Never error the UI over a failed stat.
+        // Phase 31 gap #2 fix: a failed probe clears the token for the request
+        // that is still current, so the both-cards status-quo render (UI-SPEC
+        // §9.3) holds after a PRIOR resolution too — a rejection can no longer
+        // leave a stale, clickable engine card on screen. Guarded by the same
+        // stale-drop rule as the success path, so a superseded probe's late
+        // rejection never overwrites a newer resolution. Never error the UI
+        // over a failed stat.
+        if (requestId === enginePathRequestIdRef.current) {
+          setEnginePath("unknown");
+        }
         console.error("Engine path probe failed:", e);
       }
     } else {
