@@ -102,6 +102,20 @@ export type GitState = "idle" | "running" | "success" | "error";
  */
 export type EngineUpdateState = "idle" | "running" | "success" | "error" | "partial";
 
+/**
+ * Phase 31 (D-01/D-08/D-09, PTHS-01/PTHS-02): the closed machine vocabulary for
+ * the workspace's engine-update path. `App.tsx` holds this token in state
+ * (`useState<EnginePath>("unknown")`) and `IdlePanel` maps token → conditional
+ * render — no translated string, no boolean soup, no derived label ever enters
+ * state (WIRE-01).
+ *
+ * `"unknown"` is FRONTEND-ONLY: it is the initial/reset value (no workspace
+ * selected — D-09) and the sub-second pre-resolution frame (UI-SPEC §9.3). The
+ * Rust `engine_path` command never returns it — it answers only
+ * `"git" | "p4" | "none"`.
+ */
+export type EnginePath = "unknown" | "git" | "p4" | "none";
+
 export interface GitBranchInfo {
   branch: string;
   ahead: number;

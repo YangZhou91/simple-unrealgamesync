@@ -164,6 +164,15 @@ export function engineStatus(workspaceId: string): Promise<string | null> {
   return invoke("engine_status", { workspaceId });
 }
 
+// Phase 31 (D-01/D-07, PTHS-01): the read-only engine-path probe. Resolves the
+// workspace shape to exactly one machine token — the git leg is decided ONLY by
+// `<root>/UnrealEngine/.git` presence (never derived from git_status). The
+// camelCase `workspaceId` key auto-converts to the Rust `workspace_id`, mirroring
+// every existing wrapper. Rust never returns "unknown" — that is frontend-only.
+export function enginePath(workspaceId: string): Promise<"git" | "p4" | "none"> {
+  return invoke("engine_path", { workspaceId });
+}
+
 // HOTUI-14 (Phase 12 D-06/D-07/D-08): operator-facing log affordances.
 // All three resolve the log path Rust-side; the JS only fires the command and
 // (for exportLog) shows the returned destination path. The save dialog inside

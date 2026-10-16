@@ -104,6 +104,7 @@ pub fn run() {
             commands::engine::engine_update,
             commands::engine::stop_engine_update,
             commands::engine::engine_status,
+            commands::engine::engine_path,
             commands::log::open_logs_folder,
             commands::log::export_log,
             commands::log::get_log_path,
