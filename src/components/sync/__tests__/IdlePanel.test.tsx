@@ -33,10 +33,10 @@ const baseProps = {
 };
 
 const gitBranch: GitBranchInfo = {
-  branch: "UE5.7_CBT2_Dev",
+  branch: "UE5.7_Dev",
   ahead: 0,
   behind: 0,
-  remote: "origin/UE5.7_CBT2_Dev",
+  remote: "origin/UE5.7_Dev",
   short_hash: "a1b2c3d",
   is_detached: false,
 };

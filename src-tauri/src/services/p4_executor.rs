@@ -626,7 +626,7 @@ impl P4Executor {
 
     /// The engine subtree's own have-changelist (D-10): the analogue of
     /// `get_have_changelist` scoped to `UnrealEngine/Engine/...`, so the engine
-    /// card's status line shows the engine's CL (never the project's FYGame CL,
+    /// card's status line shows the engine's CL (never the project's ExampleGame CL,
     /// which would be actively misleading).
     ///
     /// `get_have_changelist` is deliberately NOT widened with a path parameter —
@@ -2754,7 +2754,7 @@ pub fn parse_changelists(output: &str) -> Vec<ChangelistEntry> {
 //
 // Surfaces ALL files with abnormal p4 status in the ExampleGame structural
 // whitelist (Config/ + Source/ + <project>.uproject), grouped into 5
-// categories. Motivated by FY.Uproject showing "not in current workspace
+// categories. Motivated by ExampleGame.uproject showing "not in current workspace
 // mapping" after a stream switch stranded files from the prior stream.
 //
 // THREE p4 commands cover all 5 categories (CONTEXT D-mechanism):
@@ -3531,13 +3531,13 @@ Server network estimates: files added/updated/deleted=0/0/0, bytes added/updated
     fn test_parse_reconcile_line_opened_for_edit() {
         // Live `-s` reconcile on an already-opened .uproject: "...#25 - opened for edit"
         let r = parse_reconcile_line(
-            "info: UnrealEngine\\FYGame\\FY.uproject#25 - opened for edit",
+            "info: UnrealEngine\\ExampleGame\\ExampleGame.uproject#25 - opened for edit",
         );
         assert_eq!(
             r,
             Some((
                 WorkspaceHealthCategory::Differs,
-                "FYGame/FY.uproject".to_string()
+                "ExampleGame/ExampleGame.uproject".to_string()
             ))
         );
     }
@@ -3546,13 +3546,13 @@ Server network estimates: files added/updated/deleted=0/0/0, bytes added/updated
     fn test_parse_reconcile_line_opened_for_add() {
         // Live `-s` reconcile on an opened-for-add config file.
         let r = parse_reconcile_line(
-            "info: UnrealEngine\\FYGame\\Config\\ContentBaker\\Win64\\Redirects.json#1 - opened for add",
+            "info: UnrealEngine\\ExampleGame\\Config\\Maps\\Win64\\Redirects.json#1 - opened for add",
         );
         assert_eq!(
             r,
             Some((
                 WorkspaceHealthCategory::NotInDepot,
-                "Config/ContentBaker/Win64/Redirects.json".to_string()
+                "Config/Maps/Win64/Redirects.json".to_string()
             ))
         );
     }
@@ -3818,25 +3818,25 @@ Server network estimates: files added/updated/deleted=0/0/0, bytes added/updated
 
     #[test]
     fn test_build_audit_whitelist_args_discovers_mismatched_uproject_name() {
-        // Live Art_UGS_Cook: project_dir is FYGame, on-disk file is FY.uproject.
+        // Live cook workspace: project_dir is ExampleGame, on-disk file is ExampleGameMobile.uproject.
         use std::fs;
-        let tmp_dir = std::env::temp_dir().join("p4_test_audit_whitelist_fy_uproject");
+        let tmp_dir = std::env::temp_dir().join("p4_test_audit_whitelist_mismatched_uproject");
         let _ = fs::remove_dir_all(&tmp_dir);
-        let project_dir = tmp_dir.join("UnrealEngine").join("FYGame");
+        let project_dir = tmp_dir.join("UnrealEngine").join("ExampleGame");
         fs::create_dir_all(project_dir.join("Config")).unwrap();
         fs::create_dir_all(project_dir.join("Source")).unwrap();
-        fs::write(project_dir.join("FY.uproject"), "{}").unwrap();
+        fs::write(project_dir.join("ExampleGameMobile.uproject"), "{}").unwrap();
 
         let root_str = tmp_dir.to_string_lossy().replace('\\', "/");
-        let args = build_audit_whitelist_args(&root_str, "FYGame");
+        let args = build_audit_whitelist_args(&root_str, "ExampleGame");
         assert!(
             args.iter()
-                .any(|a| a.contains("UnrealEngine/FYGame/FY.uproject")),
-            "expected discovered FY.uproject, not invented FYGame.uproject: {args:?}"
+                .any(|a| a.contains("UnrealEngine/ExampleGame/ExampleGameMobile.uproject")),
+            "expected discovered ExampleGameMobile.uproject, got {args:?}"
         );
         assert!(
-            args.iter().all(|a| !a.ends_with("/FYGame.uproject")),
-            "must not invent FYGame.uproject: {args:?}"
+            args.iter().all(|a| !a.ends_with("/ExampleGame.uproject")),
+            "must not invent ExampleGame.uproject: {args:?}"
         );
         let _ = fs::remove_dir_all(&tmp_dir);
     }
@@ -4963,8 +4963,8 @@ exit: 0
         // CR-01: a local workspace path (Windows drive root) before ` - ` is
         // recognized just like a depot path. Trailing `#rev` glue stripped.
         assert_eq!(
-            extract_warn_path("D:\\ExampleDepot\\FY\\Content\\X.uasset#7 - no such file(s)."),
-            "D:\\ExampleDepot\\FY\\Content\\X.uasset"
+            extract_warn_path("D:\\ExampleDepot\\Example\\Content\\X.uasset#7 - no such file(s)."),
+            "D:\\ExampleDepot\\Example\\Content\\X.uasset"
         );
     }
 

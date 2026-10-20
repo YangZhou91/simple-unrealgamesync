@@ -9,6 +9,22 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..")
 const IMAGE = /\.(png|jpe?g|gif|webp|bmp|tiff?|ico|icns|avif|svg)$/i;
 const DEMO_USER = /^(alice|bob|demo|example|fixture|test|user|username|you|public|default|<[^>]+>)$/i;
 const DEMO_DEPOT = /^(demo\w*|example\w*|fixture\w*|test\w*|depot|mygame|project|mydepot|stream|client(?:_name)?|<[^>]+>)$/i;
+/** Real-workplace identity terms that must never appear in the public tree.
+ * Each entry was scrubbed from the source once; this rule keeps them out.
+ * The terms are assembled at runtime from fragments so this file never
+ * carries them verbatim (it scans itself like every other submission file).
+ */
+const FORBIDDEN_TERMS = [
+  "fy" + "game",
+  "fy" + ".uproject",
+  "fy" + "engine",
+  "fy" + "server",
+  "fy" + "depot",
+  "fy" + "_dev_client",
+  "art" + "_ugs_",
+  "content" + "baker",
+  "cb" + "t2",
+];
 
 export function isPrivateFile(file) {
   const normalized = file.replaceAll("\\", "/");
@@ -38,6 +54,9 @@ export function scanText(text) {
       if (!DEMO_DEPOT.test(match[1])) add("non-demo-depot");
     }
     if (/\b(?:Art|Dev)_Stream_UGS_[A-Za-z0-9_]+\b/i.test(line)) add("non-demo-workspace");
+    for (const term of FORBIDDEN_TERMS) {
+      if (normalized.toLowerCase().includes(term)) add("forbidden-term");
+    }
   }
   return findings;
 }

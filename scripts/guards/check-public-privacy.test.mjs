@@ -35,6 +35,16 @@ test("generic paths, credential URLs, private material and depot policy", () => 
   assert.deepEqual(scanText("C:/Users/alice/test //DemoDepot/Main/file.uasset https://github.com/YangZhou91/simple-unrealgamesync"), []);
 });
 
+test("real-workplace identity terms are rejected in any casing or path spelling", () => {
+  // Constructed at runtime so this test file itself never carries the terms verbatim.
+  const terms = ["fy" + "game", "fy" + ".uproject", "fy" + "engine", "fy" + "server", "fy" + "depot", "fy" + "_dev_client", "art" + "_ugs_", "content" + "baker", "cb" + "t2"];
+  for (const term of terms) {
+    assert.ok(scanText(`fixture mentioning ${term} in prose`).length, term);
+    assert.ok(scanText(`Fixture Mentioning ${term.toUpperCase()} In Prose`).length, term.toUpperCase());
+  }
+  assert.deepEqual(scanText("ExampleGame.uproject and ExampleDepot are fine"), []);
+});
+
 test("index discovery includes staged additions, hidden files, canonical, scripts and spaces", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "privacy-guard-"));
   execFileSync("git", ["init", "--quiet", root]);

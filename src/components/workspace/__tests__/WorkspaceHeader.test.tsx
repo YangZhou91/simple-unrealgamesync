@@ -15,7 +15,7 @@ const workspace: WorkspaceConfig = {
   name: "DemoGame Development Workspace",
   rootPath: "D:\\DemoDepot\\DemoGame",
   projectDir: "DemoGame",
-  p4Client: "fy_dev_client",
+  p4Client: "fixture-dev-client",
   p4User: "developer",
   lastSyncCl: "381699",
   lastSyncTime: null,

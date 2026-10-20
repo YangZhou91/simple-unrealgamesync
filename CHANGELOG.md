@@ -81,7 +81,7 @@ All notable changes to Simple UnrealGameSync will be documented in this file.
 ## [1.5.3] - 2026-07-24
 
 ### Added
-- **Show current UnrealEngine git commit + detached-HEAD status**: the idle panel now shows the short commit hash (e.g. `a1b2c3d`) of the workspace's UnrealEngine (FYEngine) git repo next to the branch name, so you can see exactly which commit/engine version you're on. When the repo is in a detached-HEAD state (common for this dual-VCS UnrealEngine setup where p4 sync pins the git tree to a specific commit), an amber "detached" badge appears and the branch line reads "(detached)" instead of a misleading branch name.
+- **Show current UnrealEngine git commit + detached-HEAD status**: the idle panel now shows the short commit hash (e.g. `a1b2c3d`) of the workspace's UnrealEngine (engine) git repo next to the branch name, so you can see exactly which commit/engine version you're on. When the repo is in a detached-HEAD state (common for this dual-VCS UnrealEngine setup where p4 sync pins the git tree to a specific commit), an amber "detached" badge appears and the branch line reads "(detached)" instead of a misleading branch name.
 
 ## [1.5.2] - 2026-07-24
 
